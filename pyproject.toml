@@ -3,5 +3,16 @@ name = "tigertag"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
+authors = [
+    { name = "Sean Ericson", email = "sericson0@gmail.com" }
+]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "mutagen>=1.47.0",
+    "pandas>=2.3.3",
+    "rapidfuzz>=3.14.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.8,<0.10.0"]
+build-backend = "uv_build"
