@@ -7,15 +7,20 @@ def strip_accents(text: str) -> str:
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower()
 
 
-def update_filename(path: Path, title: str) -> None:
+def update_filename(path: Path, title: str, orchestra: str = "", year: str = "") -> Path:
     """Rename the file to a slugified version of the title, preserving the extension."""
     if not path.is_file():
         raise ValueError(f"Path is not a file: {path}")
 
-    safe_title = slugify_filename(title)
+    tag_title = title
+    if orchestra != "" and year != "":
+        tag_title = f"{orchestra} - {title} - {year}"
+    elif orchestra != "":
+        tag_title = f"{orchestra} - {title}"
+
+    safe_title = slugify_filename(tag_title)
 
     new_path = path.with_name(f"{safe_title}{path.suffix.lower()}")
-
     # No rename if filename is already correct (case-insensitive on Windows)
     if new_path.resolve() != path.resolve():
         counter = 1
@@ -27,6 +32,8 @@ def update_filename(path: Path, title: str) -> None:
         print(f"Renamed `{path.stem}` →→→ `{new_path.name}`")
     else:
         print(f"Kept name `{new_path.name}`")
+    return new_path
+
 
 
 
