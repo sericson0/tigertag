@@ -1,7 +1,11 @@
+from metadata_handler import load_parquet_folder
+from helper_functions import subset_entries, parse_years_from_folder
+import tag_updater
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext
 import threading
 import sys
+import pandas as pd
 from io import StringIO
 
 class ConsoleRedirect:
@@ -12,261 +16,334 @@ class ConsoleRedirect:
         
     def write(self, string):
         self.text_widget.insert(tk.END, string)
+        # Auto-scroll to show new content, but leave some margin at bottom
         self.text_widget.see(tk.END)
+        # Move view up slightly so text isn't at absolute bottom
+        self.text_widget.yview_scroll(-2, 'units')
         self.text_widget.update_idletasks()
         
     def flush(self):
         pass
 
-class ModernButton(tk.Canvas):
-    """Custom modern button with hover effects"""
-    def __init__(self, parent, text, command, bg="#007acc", fg="white", hover_bg="#005a9e", **kwargs):
-        super().__init__(parent, height=40, bg=parent['bg'], highlightthickness=0, **kwargs)
-        self.command = command
-        self.bg = bg
-        self.hover_bg = hover_bg
-        self.fg = fg
-        self.text = text
-        self.disabled = False
+class ArtistSelectorDropdown(tk.Frame):
+    """A modern dropdown widget for selecting multiple artists with checkboxes"""
+    
+    def __init__(self, parent, artists, **kwargs):
+        """
+        Parameters:
+        -----------
+        parent : tk widget
+            Parent widget
+        artists : list or dict
+            List of artist names or dict of artist data
+        """
+        super().__init__(parent, **kwargs)
         
-        self.bind('<Button-1>', self._on_click)
-        self.bind('<Enter>', self._on_enter)
-        self.bind('<Leave>', self._on_leave)
-        self.bind('<Configure>', self._on_configure)
-        
-        self._draw()
-        
-    def _draw(self):
-        self.delete('all')
-        w = self.winfo_width() or 200
-        h = self.winfo_height() or 40
-        
-        color = self.hover_bg if hasattr(self, '_hovered') and self._hovered else self.bg
-        if self.disabled:
-            color = "#cccccc"
-            
-        self.create_rectangle(0, 0, w, h, fill=color, outline='', tags='bg')
-        self.create_text(w/2, h/2, text=self.text, fill=self.fg if not self.disabled else "#666666", 
-                        font=('Segoe UI', 10, 'bold'), tags='text')
-        
-    def _on_click(self, event):
-        if not self.disabled and self.command:
-            self.command()
-            
-    def _on_enter(self, event):
-        if not self.disabled:
-            self._hovered = True
-            self._draw()
-            
-    def _on_leave(self, event):
-        self._hovered = False
-        self._draw()
-        
-    def _on_configure(self, event):
-        self._draw()
-        
-    def config_state(self, state):
-        self.disabled = (state == 'disabled')
-        self._draw()
+        # Extract artist names if dict is provided
+        if isinstance(artists, dict):
+            self.artists = list(artists.keys())
+        else:
+            self.artists = list(artists) if artists else []  # Handle None case
 
-class ToolGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Tool Interface")
-        self.root.geometry("850x700")
+        # Store selection state
+        self.artist_vars = {}
+        self.is_expanded = False
         
-        # Modern color scheme
+        # Colors
         self.colors = {
-            'bg': '#f5f5f5',
-            'card_bg': 'white',
-            'primary': '#007acc',
-            'primary_hover': '#005a9e',
-            'text': '#333333',
-            'text_light': '#666666',
+            'bg': '#ffffff',
             'border': '#e0e0e0',
-            'console_bg': '#1e1e1e',
-            'console_fg': '#d4d4d4',
-            'success': '#28a745',
-            'input_bg': '#ffffff'
+            'hover': '#f5f5f5',
+            'primary': '#007acc',
+            'text': '#333333'
         }
         
-        self.root.configure(bg=self.colors['bg'])
+        self.configure(bg=self.colors['bg'])
+        
+        # Only create widgets if we have artists
+        if self.artists:
+            self.create_widgets()
+        
+    def __del__(self):
+        """Clean up tkinter variables when widget is destroyed"""
+        try:
+            # Clear all tkinter variables
+            for var in self.artist_vars.values():
+                try:
+                    del var
+                except:
+                    pass
+            self.artist_vars.clear()
+        except:
+            pass
+        
+    def create_widgets(self):
+        # Main container
+        self.main_frame = tk.Frame(self, bg=self.colors['bg'], 
+                                   highlightthickness=1,
+                                   highlightbackground=self.colors['border'])
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Header (clickable to expand/collapse)
+        self.header = tk.Frame(self.main_frame, bg=self.colors['bg'], cursor='hand2')
+        self.header.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Selected count label
+        self.count_label = tk.Label(self.header, 
+                                    text="Select Artists (0 selected)",
+                                    font=('Segoe UI', 10),
+                                    bg=self.colors['bg'],
+                                    fg=self.colors['text'],
+                                    anchor='w')
+        self.count_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Dropdown arrow
+        self.arrow_label = tk.Label(self.header, text="▼",
+                                    font=('Segoe UI', 8),
+                                    bg=self.colors['bg'],
+                                    fg=self.colors['text'])
+        self.arrow_label.pack(side=tk.RIGHT, padx=5)
+        
+        # Bind click events to header
+        self.header.bind('<Button-1>', lambda e: self.toggle_dropdown())
+        self.count_label.bind('<Button-1>', lambda e: self.toggle_dropdown())
+        self.arrow_label.bind('<Button-1>', lambda e: self.toggle_dropdown())
+        
+        # Dropdown content (hidden by default)
+        self.dropdown_frame = tk.Frame(self.main_frame, bg=self.colors['bg'])
+        
+        # Control buttons frame
+        controls_frame = tk.Frame(self.dropdown_frame, bg=self.colors['bg'])
+        controls_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Select All button
+        select_all_btn = tk.Button(controls_frame, text="Select All",
+                                   command=self.select_all,
+                                   bg=self.colors['primary'], fg='white',
+                                   font=('Segoe UI', 9),
+                                   relief=tk.FLAT, cursor='hand2',
+                                   padx=10, pady=5)
+        select_all_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self._add_hover(select_all_btn, self.colors['primary'], '#005a9e')
+        
+        # Deselect All button
+        deselect_all_btn = tk.Button(controls_frame, text="Deselect All",
+                                     command=self.deselect_all,
+                                     bg='#6c757d', fg='white',
+                                     font=('Segoe UI', 9),
+                                     relief=tk.FLAT, cursor='hand2',
+                                     padx=10, pady=5)
+        deselect_all_btn.pack(side=tk.LEFT)
+        self._add_hover(deselect_all_btn, '#6c757d', '#5a6268')
+        
+        # Scrollable artist list
+        canvas_frame = tk.Frame(self.dropdown_frame, bg=self.colors['bg'],
+                               highlightthickness=1,
+                               highlightbackground=self.colors['border'])
+        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+        
+        # Canvas and scrollbar
+        self.canvas = tk.Canvas(canvas_frame, bg=self.colors['bg'],
+                               highlightthickness=0, height=200)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient='vertical', 
+                                 command=self.canvas.yview)
+        
+        self.scrollable_frame = tk.Frame(self.canvas, bg=self.colors['bg'])
+        self.scrollable_frame.bind(
+            '<Configure>',
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all'))
+        )
+        
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor='nw')
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Add checkboxes for each artist
+        for artist in sorted(self.artists):
+            self._create_artist_checkbox(artist)
+        
+        # Enable mouse wheel scrolling
+        self.canvas.bind_all('<MouseWheel>', self._on_mousewheel)
+        
+    def _create_artist_checkbox(self, artist):
+        """Create a checkbox for an artist"""
+        var = tk.BooleanVar(value=False)
+        self.artist_vars[artist] = var
+        
+        frame = tk.Frame(self.scrollable_frame, bg=self.colors['bg'])
+        frame.pack(fill=tk.X, padx=5, pady=2, anchor='w')
+        
+        # Add hover effect to frame
+        frame.bind('<Enter>', lambda e: frame.config(bg=self.colors['hover']))
+        frame.bind('<Leave>', lambda e: frame.config(bg=self.colors['bg']))
+        
+        cb = tk.Checkbutton(frame, text=artist, variable=var,
+                           bg=self.colors['bg'], fg=self.colors['text'],
+                           font=('Segoe UI', 9),
+                           activebackground=self.colors['hover'],
+                           selectcolor='white',
+                           relief=tk.FLAT,
+                           anchor='w',
+                           command=self.update_count)
+        cb.pack(side=tk.LEFT, padx=5, pady=2)
+        
+        # Make frame clickable too
+        frame.bind('<Button-1>', lambda e, v=var: self._toggle_checkbox(v))
+        
+    def _toggle_checkbox(self, var):
+        """Toggle checkbox value when frame is clicked"""
+        var.set(not var.get())
+        self.update_count()
+        
+    def _add_hover(self, button, normal_color, hover_color):
+        """Add hover effect to button"""
+        button.bind('<Enter>', lambda e: button.config(bg=hover_color))
+        button.bind('<Leave>', lambda e: button.config(bg=normal_color))
+        
+    def _on_mousewheel(self, event):
+        """Handle mouse wheel scrolling"""
+        if self.is_expanded:
+            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+    def toggle_dropdown(self):
+        """Expand or collapse the dropdown"""
+        if self.is_expanded:
+            self.dropdown_frame.pack_forget()
+            self.arrow_label.config(text="▼")
+            self.is_expanded = False
+        else:
+            self.dropdown_frame.pack(fill=tk.BOTH, expand=True)
+            self.arrow_label.config(text="▲")
+            self.is_expanded = True
+            
+    def select_all(self):
+        """Select all artists"""
+        for var in self.artist_vars.values():
+            var.set(True)
+        self.update_count()
+        
+    def deselect_all(self):
+        """Deselect all artists"""
+        for var in self.artist_vars.values():
+            var.set(False)
+        self.update_count()
+        
+    def update_count(self):
+        """Update the selected count label"""
+        selected_count = sum(var.get() for var in self.artist_vars.values())
+        total_count = len(self.artist_vars)
+        self.count_label.config(text=f"Select Artists ({selected_count}/{total_count} selected)")
+        
+    def get_selected_artists(self):
+        """Return list of selected artist names"""
+        return [artist for artist, var in self.artist_vars.items() if var.get()]
+    
+    def set_selected_artists(self, artist_list):
+        """Set which artists are selected"""
+        for artist, var in self.artist_vars.items():
+            var.set(artist in artist_list)
+        self.update_count()
+
+
+class ToolGUI:
+    def __init__(self, root, artists=None, metadata_dict:dict={}):
+        self.root = root
+        self.root.title("Tool Interface")
+        self.root.geometry("700x700")
         
         # Variables
         self.folder_path = tk.StringVar()
-        self.start_year = tk.StringVar(value="2020")
-        self.end_year = tk.StringVar(value="2024")
+        self.start_year = tk.StringVar(value="1935")
+        self.end_year = tk.StringVar(value="1945")
         self.input_var = tk.StringVar()
         self.waiting_for_input = False
         self.input_result = None
         
+        self.artists = artists
+        self.metadata_dict = metadata_dict
         # Create GUI elements
         self.create_widgets()
         
     def create_widgets(self):
-        # Main container with padding
-        main_frame = tk.Frame(self.root, bg=self.colors['bg'])
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        # Main container
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Header
-        header = tk.Label(main_frame, text="Tool Configuration", 
-                         font=('Segoe UI', 20, 'bold'),
-                         bg=self.colors['bg'], fg=self.colors['text'])
-        header.pack(pady=(0, 20))
-        
-        # Configuration card
-        config_card = tk.Frame(main_frame, bg=self.colors['card_bg'], relief=tk.FLAT)
-        config_card.pack(fill=tk.X, pady=(0, 20))
-        self._add_shadow(config_card)
-        
-        config_inner = tk.Frame(config_card, bg=self.colors['card_bg'])
-        config_inner.pack(fill=tk.BOTH, padx=30, pady=25)
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(5, weight=1)
         
         # Folder selection
-        self._create_input_section(config_inner, "Folder Path", 0)
-        folder_frame = tk.Frame(config_inner, bg=self.colors['card_bg'])
-        folder_frame.grid(row=1, column=0, sticky='ew', pady=(5, 20))
+        ttk.Label(main_frame, text="Folder:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        folder_frame = ttk.Frame(main_frame)
+        folder_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
         folder_frame.columnconfigure(0, weight=1)
         
-        self.folder_entry = self._create_modern_entry(folder_frame, self.folder_path)
-        self.folder_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-        
-        browse_btn = tk.Button(folder_frame, text="📁 Browse", command=self.browse_folder,
-                              bg=self.colors['border'], fg=self.colors['text'],
-                              font=('Segoe UI', 9), relief=tk.FLAT, cursor='hand2',
-                              padx=15, pady=8)
-        browse_btn.pack(side=tk.RIGHT)
-        self._add_hover_effect(browse_btn, self.colors['border'], '#d0d0d0')
-        
-        # Year inputs
-        years_frame = tk.Frame(config_inner, bg=self.colors['card_bg'])
-        years_frame.grid(row=2, column=0, sticky='ew')
-        years_frame.columnconfigure(0, weight=1)
-        years_frame.columnconfigure(1, weight=1)
+        ttk.Entry(folder_frame, textvariable=self.folder_path).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        ttk.Button(folder_frame, text="Browse", command=self.browse_folder).grid(row=0, column=1)
         
         # Start year
-        start_frame = tk.Frame(years_frame, bg=self.colors['card_bg'])
-        start_frame.grid(row=0, column=0, sticky='ew', padx=(0, 10))
-        self._create_input_section(start_frame, "Start Year", 0, parent_bg=self.colors['card_bg'])
-        self.start_entry = self._create_modern_entry(start_frame, self.start_year)
-        self.start_entry.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(main_frame, text="Start Year:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.start_year, width=15).grid(row=1, column=1, sticky=tk.W, pady=5)
         
         # End year
-        end_frame = tk.Frame(years_frame, bg=self.colors['card_bg'])
-        end_frame.grid(row=0, column=1, sticky='ew')
-        self._create_input_section(end_frame, "End Year", 0, parent_bg=self.colors['card_bg'])
-        self.end_entry = self._create_modern_entry(end_frame, self.end_year)
-        self.end_entry.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(main_frame, text="End Year:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.end_year, width=15).grid(row=2, column=1, sticky=tk.W, pady=5)
+        
+        # Artist selector
+        ttk.Label(main_frame, text="Artists:").grid(row=3, column=0, sticky=(tk.W, tk.N), pady=5)
+        self.artist_selector = ArtistSelectorDropdown(main_frame, self.artists)
+        self.artist_selector.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=5)
         
         # Run button
-        btn_frame = tk.Frame(main_frame, bg=self.colors['bg'])
-        btn_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        self.run_button = ModernButton(btn_frame, text="▶ Run Tool", command=self.run_tool,
-                                       bg=self.colors['primary'], hover_bg=self.colors['primary_hover'])
-        self.run_button.pack(fill=tk.X)
-        
-        # Console card
-        console_card = tk.Frame(main_frame, bg=self.colors['card_bg'], relief=tk.FLAT)
-        console_card.pack(fill=tk.BOTH, expand=True)
-        self._add_shadow(console_card)
-        
-        # Console header
-        console_header = tk.Frame(console_card, bg=self.colors['card_bg'])
-        console_header.pack(fill=tk.X, padx=30, pady=(20, 10))
-        
-        tk.Label(console_header, text="Console Output", 
-                font=('Segoe UI', 12, 'bold'),
-                bg=self.colors['card_bg'], fg=self.colors['text']).pack(side=tk.LEFT)
+        self.run_button = ttk.Button(main_frame, text="Run Tool", command=self.run_tag_updater)
+        self.run_button.grid(row=4, column=0, columnspan=2, pady=10, sticky=tk.W)
         
         # Console output area
-        console_frame = tk.Frame(console_card, bg=self.colors['card_bg'])
-        console_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=(0, 20))
+        console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
+        console_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        console_frame.columnconfigure(0, weight=1)
+        console_frame.rowconfigure(0, weight=1)
         
-        self.console = scrolledtext.ScrolledText(
-            console_frame, wrap=tk.WORD,
-            bg=self.colors['console_bg'], 
-            fg=self.colors['console_fg'],
-            font=('Consolas', 10),
-            relief=tk.FLAT,
-            padx=15, pady=15,
-            insertbackground=self.colors['console_fg']
-        )
-        self.console.pack(fill=tk.BOTH, expand=True)
+        self.console = scrolledtext.ScrolledText(console_frame, wrap=tk.WORD, height=15, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 10))
+        self.console.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Input area (hidden by default)
-        self.input_card = tk.Frame(main_frame, bg=self.colors['card_bg'], relief=tk.FLAT)
-        self._add_shadow(self.input_card)
+        self.input_frame = ttk.Frame(main_frame)
+        self.input_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.input_frame.columnconfigure(1, weight=1)
+        self.input_frame.grid_remove()  # Hide initially
         
-        input_inner = tk.Frame(self.input_card, bg=self.colors['card_bg'])
-        input_inner.pack(fill=tk.X, padx=30, pady=20)
-        input_inner.columnconfigure(0, weight=1)
+        ttk.Label(self.input_frame, text="Input:").grid(row=0, column=0, sticky=tk.W)
+        self.input_entry = ttk.Entry(self.input_frame, textvariable=self.input_var)
+        self.input_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        ttk.Button(self.input_frame, text="Submit", command=self.submit_input).grid(row=0, column=2)
         
-        tk.Label(input_inner, text="Input Required", 
-                font=('Segoe UI', 10, 'bold'),
-                bg=self.colors['card_bg'], fg=self.colors['text']).grid(row=0, column=0, sticky='w', pady=(0, 10))
-        
-        input_row = tk.Frame(input_inner, bg=self.colors['card_bg'])
-        input_row.grid(row=1, column=0, sticky='ew')
-        input_row.columnconfigure(0, weight=1)
-        
-        self.input_entry = self._create_modern_entry(input_row, self.input_var)
-        self.input_entry.grid(row=0, column=0, sticky='ew', padx=(0, 10))
-        
-        submit_btn = tk.Button(input_row, text="Submit", command=self.submit_input,
-                              bg=self.colors['success'], fg='white',
-                              font=('Segoe UI', 9, 'bold'), relief=tk.FLAT, 
-                              cursor='hand2', padx=20, pady=8)
-        submit_btn.grid(row=0, column=1)
-        self._add_hover_effect(submit_btn, self.colors['success'], '#218838')
-        
+        # Bind Enter key to submit
         self.input_entry.bind('<Return>', lambda e: self.submit_input())
-        
-    def _create_input_section(self, parent, label_text, row, parent_bg=None):
-        bg = parent_bg if parent_bg else self.colors['card_bg']
-        label = tk.Label(parent, text=label_text, 
-                        font=('Segoe UI', 10, 'bold'),
-                        bg=bg, fg=self.colors['text'])
-        label.grid(row=row, column=0, sticky='w')
-        
-    def _create_modern_entry(self, parent, textvariable):
-        entry = tk.Entry(parent, textvariable=textvariable,
-                        font=('Segoe UI', 10),
-                        bg=self.colors['input_bg'],
-                        fg=self.colors['text'],
-                        relief=tk.FLAT,
-                        highlightthickness=1,
-                        highlightbackground=self.colors['border'],
-                        highlightcolor=self.colors['primary'])
-        entry.config(insertbackground=self.colors['text'])
-        
-        # Add padding
-        style_frame = tk.Frame(parent, bg=self.colors['input_bg'], 
-                              highlightthickness=1,
-                              highlightbackground=self.colors['border'])
-        entry.pack(in_=style_frame, padx=10, pady=8)
-        
-        return entry
-        
-    def _add_shadow(self, widget):
-        """Add subtle shadow effect to widgets"""
-        widget.config(highlightbackground='#d0d0d0', highlightthickness=1)
-        
-    def _add_hover_effect(self, button, normal_color, hover_color):
-        """Add hover effect to regular buttons"""
-        button.bind('<Enter>', lambda e: button.config(bg=hover_color))
-        button.bind('<Leave>', lambda e: button.config(bg=normal_color))
-        
+            
     def browse_folder(self):
         folder = filedialog.askdirectory()
         if folder:
             self.folder_path.set(folder)
             
+            # Try to extract years from folder name
+            start_year, end_year = parse_years_from_folder(folder)
+            
+            if start_year is not None:
+                self.start_year.set(str(start_year))
+                self.end_year.set(str(end_year))
+                # print(f"Auto-detected years: {start_year}-{end_year}")
+            
     def submit_input(self):
         if self.waiting_for_input:
             self.input_result = self.input_var.get()
             self.input_var.set("")
-            self.input_card.pack_forget()
+            self.input_frame.grid_remove()
             self.waiting_for_input = False
             
     def custom_input(self, prompt=""):
@@ -277,67 +354,100 @@ class ToolGUI:
             
         self.waiting_for_input = True
         self.input_result = None
-        self.input_card.pack(fill=tk.X, pady=(20, 0))
+        self.input_frame.grid()
         self.input_entry.focus()
         
+        # Wait for input
         while self.waiting_for_input:
             self.root.update()
             
         return self.input_result
     
-    def run_tool(self):
+    def run_tag_updater(self):
+        # Validate inputs
         folder = self.folder_path.get()
         if not folder:
-            self.console.insert(tk.END, "❌ Error: Please select a folder\n")
+            self.console.insert(tk.END, "Error: Please select a folder\n")
             return
             
         try:
             start = int(self.start_year.get())
             end = int(self.end_year.get())
         except ValueError:
-            self.console.insert(tk.END, "❌ Error: Years must be valid integers\n")
+            self.console.insert(tk.END, "Error: Years must be valid integers\n")
+            return
+        
+        # Get selected artists
+        selected_artists = self.artist_selector.get_selected_artists()
+        if not selected_artists:
+            self.console.insert(tk.END, "Error: Please select at least one artist\n")
             return
             
+        # Clear console
         self.console.delete(1.0, tk.END)
-        self.run_button.config_state('disabled')
         
-        thread = threading.Thread(target=self.execute_tool, args=(folder, start, end))
+        # Disable run button
+        self.run_button.config(state='disabled')
+        
+        # Run in separate thread to keep GUI responsive
+        thread = threading.Thread(target=self.execute_tag_updater, args=(folder, self.metadata_dict, start, end, selected_artists))
         thread.daemon = True
         thread.start()
         
-    def execute_tool(self, folder, start_year, end_year):
+    def execute_tag_updater(self, folder, metadata_dict, start_year, end_year, selected_artists):
+        # Redirect stdout to console
         old_stdout = sys.stdout
-        sys.stdout = ConsoleRedirect(self.console)
-        
         old_input = __builtins__.input
-        __builtins__.input = self.custom_input
         
         try:
-            # Import and run your function here
-            # Example: from your_package import your_function
-            # your_function(folder, start_year, end_year)
+            # Create metadata subset
+            metadata_sub = subset_entries(
+                df = pd.concat([metadata_dict[artist] for artist in selected_artists]),
+                start_year = start_year,
+                end_year=end_year,
+            )
             
-            print("🚀 Starting tool execution...")
-            print(f"📁 Folder: {folder}")
-            print(f"📅 Start Year: {start_year}")
-            print(f"📅 End Year: {end_year}\n")
+            # Redirect after creating the data
+            sys.stdout = ConsoleRedirect(self.console)
+            __builtins__.input = self.custom_input
             
-            for year in range(start_year, end_year + 1):
-                print(f"⚙️  Processing year {year}...")
-                
-            name = input("👤 Enter your name: ")
-            print(f"👋 Hello, {name}!")
-            
-            print("\n✅ Tool execution completed successfully!")
-            
+            # Run the tag updater
+            tag_updater.update_tags(folder, metadata_sub)
+        
         except Exception as e:
-            print(f"\n❌ Error: {str(e)}")
+            # Make sure console redirect is active for error messages
+            if sys.stdout != ConsoleRedirect(self.console):
+                sys.stdout = ConsoleRedirect(self.console)
+            print(f"\nError: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
         finally:
+            # Restore stdout and input
             sys.stdout = old_stdout
             __builtins__.input = old_input
-            self.root.after(0, lambda: self.run_button.config_state('normal'))
+            
+            # Re-enable run button (must be done in main thread)
+            try:
+                self.root.after(0, lambda: self.run_button.config(state='normal'))
+            except:
+                pass
 
 if __name__ == "__main__":
+    
     root = tk.Tk()
-    app = ToolGUI(root)
+    metadata_dict = load_parquet_folder()
+    artists = metadata_dict.keys()
+    app = ToolGUI(root, artists=artists, metadata_dict = metadata_dict)
     root.mainloop()
+
+
+
+
+# audio_folder = Path(main_folder, folders[11])  # Use the first subfolder
+# print(audio_folder)
+# # List all files in the audio folder
+# start_date = 1949
+# end_date = 1951
+
+# update_tags(audio_folder, catalogue)
