@@ -20,7 +20,7 @@ EasyID3.RegisterTextKey("remixer", "TPE3")
 # EasyID3.RegisterTextKey("mixartist", "TPE4")
 
 import re
-from helper_functions import strip_accents, update_filename
+from helper_functions import strip_accents, update_filename, parse_date
 from pathlib import Path
 
 EASYID3_CANONICAL = set(EasyID3.valid_keys.keys())
@@ -138,17 +138,6 @@ def set_mp4_freeform(tag: MP4, desc: str, value: str) -> None:
     """Write a UTF-8 FreeForm atom ----:com.apple.iTunes:<desc> = value."""
     key = f"----:com.apple.iTunes:{desc}"
     tag[key] = [MP4FreeForm(value.encode("utf-8"), dataformat=1)]
-
-
-def load_catalogue(csv_path: Path) -> pd.DataFrame:
-    """Load the reference CSV into a *DataFrame* and build a normalised title column."""
-    df = pd.read_csv(csv_path, dtype=str, encoding='latin-1').fillna("")
-    if "Title" not in df.columns:
-        raise ValueError("CSV must contain a 'title' column")
-    df["_norm_title"] = df["Title"].apply(strip_accents)
-    df["Year"] = df['Date'].str.split('-').str[0]
-
-    return df
 
 
 def find_candidate_rows(
@@ -340,42 +329,47 @@ def ask_choice(file:str, audio_metadata: dict, catalogue: pd.DataFrame) -> int |
         print("Invalid choice. Try again.")
 
 
-main_folder =  "C:/Users/seric/Music/Tango Discography/Juan D'Arienzo" 
-csv_path = main_folder + "/Discography of Juan D_Arienzo.csv"
+main_folder =  "C:/Users/seric/Music/Tango Discography/Osvaldo Pugliese" 
+csv_path = main_folder + "/Discography of Osvaldo Pugliese.csv"
 df = load_catalogue(csv_path)
+
+
+
 
 os.listdir(main_folder)
 folders = [item.name for item in Path(main_folder).iterdir() if item.is_dir()]
 
 
-audio_folder = Path(main_folder, folders[12])  # Use the first subfolder
+# print("Files in the audio folder:")
+def update_tags(audio_folder, catalogue):
+    for file in os.listdir(audio_folder):
+        if not file.endswith(('.mp3', '.flac', '.m4a', '.mp4', "aif")):
+        # if not file.endswith(('.mp3')):
+            print(f"File {file} is of incompatible type. Skipping...")
+            continue
+        audio_file = Path(audio_folder, file)
+        audio_metadata = get_audio_metadata(audio_file)
+
+        chosen_idx = ask_choice(file, audio_metadata, catalogue)
+        if chosen_idx != 9999:
+            new_metadata = get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
+            try:
+                new_path = update_filename(
+                    audio_file, 
+                    new_metadata.title,
+                    new_metadata.orchestra,
+                    new_metadata.year)
+                write_metadata(new_path, new_metadata)
+            except Exception as e:
+                print(e)
+                continue
+
+
+
+audio_folder = Path(main_folder, folders[11])  # Use the first subfolder
 print(audio_folder)
 # List all files in the audio folder
-start_date = 1930
-end_date = 1975
-catalogue = df[df["Year"].astype(int).between(start_date, end_date)].reset_index(drop=True)
+start_date = 1949
+end_date = 1951
 
-
-# print("Files in the audio folder:")
-for file in os.listdir(audio_folder):
-    if not file.endswith(('.mp3', '.flac', '.m4a', '.mp4', "aif")):
-    # if not file.endswith(('.mp3')):
-        print(f"File {file} is of incompatible type. Skipping...")
-        continue
-    audio_file = Path(audio_folder, file)
-    audio_metadata = get_audio_metadata(audio_file)
-
-    chosen_idx = ask_choice(file, audio_metadata, catalogue)
-    if chosen_idx != 9999:
-        new_metadata = get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
-        try:
-            new_path = update_filename(
-                audio_file, 
-                new_metadata.title,
-                new_metadata.orchestra,
-                new_metadata.year)
-            write_metadata(new_path, new_metadata)
-        except Exception as e:
-            print(e)
-            continue
-
+update_tags(audio_folder, catalogue)
