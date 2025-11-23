@@ -34,6 +34,7 @@ def update_filename(path: Path, title: str, orchestra: str = "", year: str = "")
         print(f"Renamed `{path.stem}` →→→ `{new_path.name}`")
     else:
         print(f"Kept name `{new_path.name}`")
+        print("_"*80,"\n","_"*80, "\n"*5)
     return new_path
 
 
