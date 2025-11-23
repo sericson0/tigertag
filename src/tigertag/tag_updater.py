@@ -301,120 +301,66 @@ def write_metadata(path: Path, new_meta: Dict[str, str]) -> None:
 def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int | None:
     """Interactively ask the user to pick a row; return DataFrame index or None."""
     
-    # ANSI color codes for console output
-    COLORS = {
-        'header': '\033[95m',      # Magenta
-        'blue': '\033[94m',        # Blue
-        'cyan': '\033[96m',        # Cyan
-        'green': '\033[92m',       # Green
-        'yellow': '\033[93m',      # Yellow
-        'red': '\033[91m',         # Red
-        'bold': '\033[1m',         # Bold
-        'underline': '\033[4m',    # Underline
-        'end': '\033[0m'           # Reset
-    }
-    
-    def print_separator(char='─', length=80):
-        """Print a separator line"""
-        print(f"\n{COLORS['cyan']}{char * length}{COLORS['end']}")
-    
-    def print_header(text):
-        """Print a header with formatting"""
-        print_separator('═')
-        print(f"{COLORS['bold']}{COLORS['blue']}{text}{COLORS['end']}")
-        print_separator('═')
-    
-    def print_info(label, value):
-        """Print an info line with label and value"""
-        print(f"  {COLORS['yellow']}{label:12}{COLORS['end']} {value}")
-    
-    # Find candidates
     candidate_indices = find_candidate_rows(audio_metadata["title"], catalogue)
     
+    # If no candidates found, ask for manual title entry
     if not candidate_indices:
-        print_separator()
-        print(f"{COLORS['yellow']}⚠ No match found for: {COLORS['bold']}{audio_metadata['title']}{COLORS['end']}")
-        input_title = input(f"{COLORS['cyan']}→ Please type the correct title: {COLORS['end']}")
+        print("_" * 80,"\n")
+        input_title = input(f"No match for '{audio_metadata['title']}', type title here: ")
         candidate_indices = find_candidate_rows(input_title, catalogue, threshold=30)
     
     if not candidate_indices:
-        print(f"\n{COLORS['red']}✗ No candidates found for '{input_title}'. Skipping...{COLORS['end']}\n")
+        print(f"No candidates found for '{input_title}'. Skipping...")
+        print("_" * 80)
         return 9999
     
     # Display file information
-    print_header(f"📁 MATCHING: {file}")
-    print_info("Album:", audio_metadata.get("album", "N/A"))
-    print_info("Date:", audio_metadata.get("date", "N/A"))
-    print_info("Title:", audio_metadata.get("title", "N/A"))
+    print("\n" + "=" * 80)
+    print(f"MATCHING FILE: {file}")
+    print(f"  Title: {audio_metadata.get('title', 'N/A')}")
+    print(f"  Date:  {audio_metadata.get('date', 'N/A')}")
+    print(f"  Album: {audio_metadata.get('album', 'N/A')}")
+    print("=" * 80)
     
     # If only one candidate, use it automatically
     if len(candidate_indices) == 1:
-        print(f"\n{COLORS['green']}✓ Only one candidate found - using automatically{COLORS['end']}\n")
+        print("\n>>> Only one candidate found - using it automatically <<<")
+        # print("_"*80, "\n"*5)
         return candidate_indices[0]
     
-    # Display candidates
-    print_separator()
-    print(f"{COLORS['bold']}FOUND {len(candidate_indices)} POSSIBLE MATCHES:{COLORS['end']}\n")
+    # Display all candidates
+    print(f"\nFOUND {len(candidate_indices)} POSSIBLE MATCHES:\n")
     
     for n, idx in enumerate(candidate_indices, 1):
         row = catalogue.loc[idx]
         title = row.get('Title', 'N/A')
-        artist = row.get('Artist', 'N/A')
+        # artist = row.get('Artist', 'N/A')
+        singer = row.get('Singer', 'N/A')
         date = row.get('Date', 'N/A')
         
-        # Format each option with alignment
-        print(f"  {COLORS['bold']}[{n}]{COLORS['end']} "
-              f"{COLORS['cyan']}{title:40}{COLORS['end']} "
-              f"— {artist:20} "
-              f"({COLORS['yellow']}{date}{COLORS['end']})")
+        # Format with padding for alignment
+        print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")
+        
+        # Add separator between choices (except after last one)
+        if n < len(candidate_indices):
+            print("      " + "-" * 70)
     
-    print_separator()
+    print("_" * 80)
     
     # Get user choice
     while True:
-        choice = input(f"\n{COLORS['bold']}→ Pick a number (or 0 to skip): {COLORS['end']}")
+        choice = input("\nPick a number (or 0 to skip):\n\n\n")
         
         if choice.isdigit():
             i = int(choice)
             if i == 0:
-                print(f"{COLORS['yellow']}⊘ Skipped{COLORS['end']}\n")
+                print(">>> Skipped <<<\n")
                 return 9999
             if 1 <= i <= len(candidate_indices):
-                print(f"{COLORS['green']}✓ Selected option {i}{COLORS['end']}\n")
+                print(f">>> Selected option {i} <<<\n")
                 return candidate_indices[i - 1]
         
-        print(f"{COLORS['red']}✗ Invalid choice. Please try again.{COLORS['end']}")
-
-
-# def ask_choice(file:str, audio_metadata: dict, catalogue: pd.DataFrame) -> int | None:
-#     """Interactively ask the user to pick a row; return DataFrame index or None."""
-    
-#     candidate_indices = find_candidate_rows(audio_metadata["title"], catalogue)
-#     if not candidate_indices:
-#         input_title = input(f"No match for {audio_metadata["title"]}, type title here: ")
-#         candidate_indices = find_candidate_rows(input_title, catalogue, threshold=30)
-#     if not candidate_indices:
-#         print(f"No candidates found for {input_title}. Skipping...")
-#         return 9999
-
-#     print(f"\nPossible matches for {file} - Album: {audio_metadata["album"]},Date: {audio_metadata["date"]}\n")
-#     if len(candidate_indices) == 1:
-#         print("\nOnly one candidate found, using it automatically.")
-#         return candidate_indices[0]
-    
-#     for n, idx in enumerate(candidate_indices, 1):
-#         row = catalogue.loc[idx]
-#         print(f" [{n}] {row['Title']} — {row.get('Artist', '')}  (Date: {row.get('Date', '')})")
-
-#     while True:
-#         choice = input("\nPick a number (or 0 to skip): ")
-#         if choice.isdigit():
-#             i = int(choice)
-#             if i == 0:
-#                 return 9999
-#             if 1 <= i <= len(candidate_indices):
-#                 return candidate_indices[i - 1]
-#         print("Invalid choice. Try again.")
+        print("Invalid choice. Please try again.")
 
 
 # main_folder =  "C:/Users/seric/Music/Tango Discography/Osvaldo Pugliese" 
@@ -443,4 +389,5 @@ def update_tags(audio_folder, catalogue):
             except Exception as e:
                 print(e)
                 continue
+    print("\n\n >>> Finished updating folder! <<< \n\n\n")
 

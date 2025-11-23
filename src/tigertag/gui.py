@@ -15,11 +15,23 @@ class ConsoleRedirect:
         self.buffer = StringIO()
         
     def write(self, string):
+        # Insert text at the end
         self.text_widget.insert(tk.END, string)
-        # Auto-scroll to show new content, but leave some margin at bottom
+        
+        # Add padding mark at the very end if not already there
+        if not hasattr(self, '_padding_added'):
+            self.text_widget.insert(tk.END, '\n' * 5)  # Add 5 blank lines as padding
+            self._padding_added = True
+        
+        # Auto-scroll to show the new content with padding visible below
         self.text_widget.see(tk.END)
-        # Move view up slightly so text isn't at absolute bottom
-        self.text_widget.yview_scroll(-2, 'units')
+        
+        # Scroll up a bit to show some of the padding below the text
+        try:
+            self.text_widget.yview_scroll(-3, 'units')
+        except:
+            pass
+            
         self.text_widget.update_idletasks()
         
     def flush(self):
@@ -63,19 +75,6 @@ class ArtistSelectorDropdown(tk.Frame):
         # Only create widgets if we have artists
         if self.artists:
             self.create_widgets()
-        
-    def __del__(self):
-        """Clean up tkinter variables when widget is destroyed"""
-        try:
-            # Clear all tkinter variables
-            for var in self.artist_vars.values():
-                try:
-                    del var
-                except:
-                    pass
-            self.artist_vars.clear()
-        except:
-            pass
         
     def create_widgets(self):
         # Main container
@@ -303,14 +302,38 @@ class ToolGUI:
         self.run_button = ttk.Button(main_frame, text="Run Tool", command=self.run_tag_updater)
         self.run_button.grid(row=4, column=0, columnspan=2, pady=10, sticky=tk.W)
         
-        # Console output area
+        # Console output area with padding
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
         console_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         console_frame.columnconfigure(0, weight=1)
         console_frame.rowconfigure(0, weight=1)
         
-        self.console = scrolledtext.ScrolledText(console_frame, wrap=tk.WORD, height=15, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 10))
+        # Add padding frame around console
+        console_padding = ttk.Frame(console_frame, padding="5")
+        console_padding.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        console_padding.columnconfigure(0, weight=1)
+        console_padding.rowconfigure(0, weight=1)
+        
+        self.console = scrolledtext.ScrolledText(
+            console_padding, 
+            wrap=tk.WORD, 
+            height=15, 
+            bg="#1e1e1e", 
+            fg="#d4d4d4", 
+            font=("Consolas", 10),
+            padx=10,  # Add horizontal padding inside console
+            pady=10   # Add vertical padding inside console
+        )
         self.console.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Configure color tags for the console
+        self.console.tag_config("cyan", foreground="#00FFFF")
+        self.console.tag_config("green", foreground="#00FF00")
+        self.console.tag_config("yellow", foreground="#FFFF00")
+        self.console.tag_config("red", foreground="#FF0000")
+        self.console.tag_config("blue", foreground="#5555FF")
+        self.console.tag_config("magenta", foreground="#FF00FF")
+        self.console.tag_config("bold", font=("Consolas", 10, "bold"))
         
         # Input area (hidden by default)
         self.input_frame = ttk.Frame(main_frame)
@@ -337,7 +360,6 @@ class ToolGUI:
             if start_year is not None:
                 self.start_year.set(str(start_year))
                 self.end_year.set(str(end_year))
-                # print(f"Auto-detected years: {start_year}-{end_year}")
             
     def submit_input(self):
         if self.waiting_for_input:
@@ -383,8 +405,10 @@ class ToolGUI:
             self.console.insert(tk.END, "Error: Please select at least one artist\n")
             return
             
-        # Clear console
+        # Clear console and add initial padding
         self.console.delete(1.0, tk.END)
+        self.console.insert(tk.END, '\n' * 5)  # Add padding at the end
+        self.console.mark_set('padding_start', 'end-6l')  # Mark where padding starts
         
         # Disable run button
         self.run_button.config(state='disabled')
@@ -434,20 +458,8 @@ class ToolGUI:
                 pass
 
 if __name__ == "__main__":
-    
     root = tk.Tk()
     metadata_dict = load_parquet_folder()
     artists = metadata_dict.keys()
-    app = ToolGUI(root, artists=artists, metadata_dict = metadata_dict)
+    app = ToolGUI(root, artists=artists, metadata_dict=metadata_dict)
     root.mainloop()
-
-
-
-
-# audio_folder = Path(main_folder, folders[11])  # Use the first subfolder
-# print(audio_folder)
-# # List all files in the audio folder
-# start_date = 1949
-# end_date = 1951
-
-# update_tags(audio_folder, catalogue)
