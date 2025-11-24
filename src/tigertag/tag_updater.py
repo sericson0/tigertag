@@ -15,9 +15,12 @@ from mutagen.flac import FLAC
 from mutagen.mp4 import MP4, MP4FreeForm   
 from mutagen.aiff import AIFF
 from mutagen.easyid3 import EasyID3
+import time
+
+
+
 EasyID3.RegisterTextKey("grouping", "TIT1")
 EasyID3.RegisterTextKey("remixer", "TPE3")
-# EasyID3.RegisterTextKey("mixartist", "TPE4")
 
 import re
 from helper_functions import strip_accents, update_filename, parse_date
@@ -44,6 +47,7 @@ class MetaData:
     strings   : str = ""
     comment   : str = None
     artist    : str = None
+    
     def __post_init__(self):
         self.artist = f"{self.orchestra} - {self.singer}"
         comment = ""
@@ -52,6 +56,7 @@ class MetaData:
             if getattr(self, val) != "":
                 comment += f"{val.capitalize()}: {getattr(self, val)}\n"
         self.comment = comment
+
 
 def get_updated_metadata(dct: dict):
     dct = {k.lower(): v for k, v in dct.items()}
@@ -73,6 +78,11 @@ def get_updated_metadata(dct: dict):
         strings    = dct.get("strings", ""),
     )
     return new_metadata
+
+
+# ============================================================
+# AUDIO METADATA READING
+# ============================================================
 
 def get_audio_metadata(path: Union[str, Path]) -> Dict[str, str]:
     """Extract a subset of metadata common across formats using *mutagen*."""
@@ -134,50 +144,14 @@ def get_audio_metadata(path: Union[str, Path]) -> Dict[str, str]:
     }
 
 
+# ============================================================
+# METADATA WRITING FUNCTIONS
+# ============================================================
+
 def set_mp4_freeform(tag: MP4, desc: str, value: str) -> None:
     """Write a UTF-8 FreeForm atom ----:com.apple.iTunes:<desc> = value."""
     key = f"----:com.apple.iTunes:{desc}"
     tag[key] = [MP4FreeForm(value.encode("utf-8"), dataformat=1)]
-
-
-def find_candidate_rows(
-        title: str, 
-        catalogue: pd.DataFrame, 
-        limit: int = 10, 
-        threshold: int = 60) -> List[int]:
-    """Return indices of the *limit* best candidate rows ranked by fuzzy token sort ratio."""
-    query = strip_accents(title)
-    choices = catalogue["_norm_title"].tolist()
-
-    scored = process.extract(query, choices, scorer=fuzz.token_sort_ratio, limit=limit)
-    # scored is a list of tuples (matched string, score, original index)
-    return [idx for _, score, idx in scored if score >= threshold]  # adjustable threshold
-
-
-def preview_diff(old: Dict[str, str], new: Dict[str, str]) -> None:
-    """Pretty‑print the tag changes before applying them."""
-    print("\nProposed tag updates (empty = unchanged):")
-    print(" ──────────────────────────────────────────────────────────")
-    for key in sorted(set(old) | set(new)):
-        old_val, new_val = old.get(key, ""), new.get(key, "")
-        mark = "✓" if old_val != new_val else " "
-        print(f" {mark} {key.capitalize():12} : '{old_val}' → '{new_val}'")
-    print(" ──────────────────────────────────────────────────────────\n")
-
-# def save_mp3_metadata(path: Path, new_meta: MetaData) -> None:
-#     audio = EasyID3(path)
-#     audio["title"] = new_meta.title
-#     audio["artist"] = new_meta.artist
-#     audio["genre"] = new_meta.genre
-#     audio["date"] = new_meta.year
-#     audio["grouping"] = [new_meta.grouping]
-#     audio["composer"] = [new_meta.composer]
-#     audio["comment"] = new_meta.comment
-#     audio["remixer"] = [audio.get("publisher", [""])[0]]          # Now works!
-#     # audio["MixArtist"] = 
-#     # Clear label and set new publisher
-#     audio["publisher"] = new_meta.label
-#     audio.save(v2_version=3)   # ID3v2.3 for maximum compatibility
 
 
 def save_mp3_metadata(path: Path, new_meta: MetaData) -> None:
@@ -194,20 +168,24 @@ def save_mp3_metadata(path: Path, new_meta: MetaData) -> None:
     audio.add(TCON(encoding=3, text=new_meta.genre))        # Genre
     audio.add(TDRC(encoding=3, text=new_meta.year))         # Date/Year
     audio.add(TCOM(encoding=3, text=new_meta.composer))     # Composer
+    
     # Get existing label/publisher
     old_label = ""
     if 'TPUB' in audio:
         old_label = str(audio['TPUB'].text[0])
-    # Move old label to remixer field (TPE3)
+    
+    # Move old label to remixer field (TPE4)
     if old_label:
         audio.add(TPE4(encoding=3, text=old_label))
-    # audio.add(TPE3(encoding=3, text=audionew_meta.label))         # Remixer
+    
     audio.add(TIT1(encoding=3, text=new_meta.grouping))     # Grouping/Content Group
     audio.add(TPUB(encoding=3, text=new_meta.label))
+    
     # Comment (requires special structure)
     audio.add(COMM(encoding=3, lang='eng', desc='', text=new_meta.comment))
     
     audio.save(path, v2_version=3)
+
 
 def save_m4a_metadata(path: Path, new_meta: MetaData) -> None:
     audio = MP4(path)
@@ -218,10 +196,9 @@ def save_m4a_metadata(path: Path, new_meta: MetaData) -> None:
     audio["©day"] = [new_meta.year]
     audio["©cmt"] = new_meta.comment
     audio["©wrt"] = [new_meta.composer]
-    # audio["©pub"] = [new_meta.label]
     set_mp4_freeform(audio, "REMIXER", new_meta.pianist)
-    # set_mp4_freeform(audio, "Label", new_meta.label)
     audio.save()
+
 
 def save_aiff_metadata(path: Path, new_meta) -> None:
     """Update AIFF metadata based on existing structure."""
@@ -259,7 +236,8 @@ def save_flac_metadata(path: Path, new_meta: MetaData) -> None:
     # Save original label/publisher to remixer BEFORE overwriting
     original_label = audio.get("label", [""])[0] if audio.get("label") else ""
     original_publisher = audio.get("publisher", [""])[0] if audio.get("publisher") else ""
-    remixer_value = original_label or original_publisher  # Use label first, fallback to publisher
+    remixer_value = original_label or original_publisher
+    
     audio["title"] = new_meta.title
     audio["artist"] = new_meta.artist
     audio["genre"] = new_meta.genre
@@ -267,17 +245,16 @@ def save_flac_metadata(path: Path, new_meta: MetaData) -> None:
     audio["comment"] = new_meta.comment
     audio["composer"] = [new_meta.composer]
     audio["grouping"] = new_meta.grouping
+    
     # Set remixer to original label/publisher value
     if remixer_value:
         audio["remixer"] = remixer_value
     
     # Clear label and set new publisher
     if "label" in audio:
-        del audio["label"]  # Remove label field
+        del audio["label"]
     audio["publisher"] = new_meta.label
-
-    new_meta.label
-    # audio["Publisher"] = new_meta.label
+    
     audio.save()
 
 
@@ -353,6 +330,7 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
         
         if choice.isdigit():
             i = int(choice)
+            stop_audio()
             if i == 0:
                 print(">>> Skipped <<<\n")
                 return 9999
@@ -360,23 +338,24 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
                 print(f">>> Selected option {i} <<<\n")
                 return candidate_indices[i - 1]
         
-        print("Invalid choice. Please try again.")
+        print("Invalid. Try: P (play), V (preview), A (pause), S (stop), 1-9 (select), 0 (skip)")
 
 
-# main_folder =  "C:/Users/seric/Music/Tango Discography/Osvaldo Pugliese" 
-# csv_path = main_folder + "/Discography of Osvaldo Pugliese.csv"
-# df = load_catalogue(csv_path)
+# ============================================================
+# MAIN UPDATE FUNCTION
+# ============================================================
 
 def update_tags(audio_folder, catalogue):
     for file in os.listdir(audio_folder):
-        if not file.endswith(('.mp3', '.flac', '.m4a', '.mp4', "aif")):
-        # if not file.endswith(('.mp3')):
+        if not file.endswith(('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff')):
             print(f"File {file} is of incompatible type. Skipping...")
             continue
+        
         audio_file = Path(audio_folder, file)
         audio_metadata = get_audio_metadata(audio_file)
 
-        chosen_idx = ask_choice(file, audio_metadata, catalogue)
+        chosen_idx = ask_choice(file, audio_metadata, catalogue, audio_file)
+        
         if chosen_idx != 9999:
             new_metadata = get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
             try:
@@ -387,7 +366,6 @@ def update_tags(audio_folder, catalogue):
                     new_metadata.year)
                 write_metadata(new_path, new_metadata)
             except Exception as e:
-                print(e)
+                print(f"Error updating file: {e}")
                 continue
     print("\n\n >>> Finished updating folder! <<< \n\n\n")
-
