@@ -298,15 +298,41 @@ def write_metadata(path: Path, new_meta: Dict[str, str]) -> None:
 # CLI flow
 # ───────────────────────────────────────────────────────────────────────────────
 
+def remove_brackets(text: str) -> str:
+    """
+    Remove text inside parentheses () and square brackets [] from a string.
+    
+    Examples:
+    ---------
+    "Mi noche triste (instrumental)" -> "Mi noche triste"
+    "La cumparsita [1916]" -> "La cumparsita"
+    "El choclo (con Rufino) [remaster]" -> "El choclo"
+    """
+    # Remove content in parentheses and square brackets
+    text = re.sub(r'\([^)]*\)', '', text)
+    text = re.sub(r'\[[^\]]*\]', '', text)
+    # Clean up extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int | None:
     """Interactively ask the user to pick a row; return DataFrame index or None."""
     
+    title = audio_metadata["title"]
+
     candidate_indices = find_candidate_rows(audio_metadata["title"], catalogue)
     
-    # If no candidates found, ask for manual title entry
+    # If no candidates found, try with dropping values in brackes
+    if not candidate_indices:
+        cleaned_title = remove_brackets(title)
+        if cleaned_title != title:  # Only retry if brackets were actually removed
+            candidate_indices = find_candidate_rows(cleaned_title,catalogue)
+                
+    # ask for manual title entry
     if not candidate_indices:
         print("_" * 80,"\n")
-        input_title = input(f"No match for '{audio_metadata['title']}', type title here: ")
+        input_title = input(f"No match for '{audio_metadata['title']}', type title here: \n\n\n\n")
         candidate_indices = find_candidate_rows(input_title, catalogue, threshold=30)
     
     if not candidate_indices:
@@ -334,7 +360,7 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
     for n, idx in enumerate(candidate_indices, 1):
         row = catalogue.loc[idx]
         title = row.get('Title', 'N/A')
-        # artist = row.get('Artist', 'N/A')
+        artist = row.get('Orchestra', 'N/A')
         singer = row.get('Singer', 'N/A')
         date = row.get('Date', 'N/A')
         
