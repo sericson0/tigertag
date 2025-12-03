@@ -1,4 +1,4 @@
-from metadata_handler import load_parquet_folder
+from metadata_handler import load_parquet_folder, csv_to_parquet
 from helper_functions import subset_entries, parse_years_from_folder
 import tag_updater
 import tkinter as tk
@@ -284,6 +284,9 @@ class ToolGUI:
         
         ttk.Entry(folder_frame, textvariable=self.folder_path).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
         ttk.Button(folder_frame, text="Browse", command=self.browse_folder).grid(row=0, column=1)
+
+        # Update metadata button
+        ttk.Button(folder_frame, text="Update Metadata", command=self.update_metadata).grid(row=1, column=1, pady=5, sticky=tk.W)
         
         # Start year
         ttk.Label(main_frame, text="Start Year:").grid(row=1, column=0, sticky=tk.W, pady=5)
@@ -348,7 +351,11 @@ class ToolGUI:
         
         # Bind Enter key to submit
         self.input_entry.bind('<Return>', lambda e: self.submit_input())
-            
+    
+    def update_metadata(self):
+        print("Updating Metadata")
+        csv_to_parquet()
+
     def browse_folder(self):
         folder = filedialog.askdirectory()
         if folder:

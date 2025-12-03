@@ -30,7 +30,7 @@ def load_parquet_folder():
     --------
     dict : Dictionary with filenames (without extension) as keys and DataFrames as values
     """
-    metadata_path = Path(Path(__file__).resolve().parent.parent.parent, "metadata")
+    metadata_path = Path(Path(__file__).resolve().parent.parent.parent, "metadata", "parquet_files")
     datasets = {}
     
     for parquet_file in metadata_path.glob('*.parquet'):
@@ -38,6 +38,10 @@ def load_parquet_folder():
         datasets[key] = pd.read_parquet(parquet_file)
     
     return datasets
+
+def csv_to_parquet():
+    metadata_folder = Path(Path(__file__).resolve().parent.parent.parent, "metadata")
+    write_parquet_files(Path(metadata_folder, "csv_files"), Path(metadata_folder, "parquet_files"))
 
 # input_path = "C:/Users/seric/OneDrive/Documents/Princeton Tango Club/DJing/tango_metadata"
 # output_path = "C:/Users/seric/OneDrive/Documents/GitHub/tigertag/metadata"
