@@ -147,8 +147,14 @@ def find_candidate_rows(
         threshold: int = 60) -> List[int]:
     """Return indices of the *limit* best candidate rows ranked by fuzzy token sort ratio."""
     query = strip_accents(title)
+    
+    # First check for exact matches
+    exact_matches = catalogue[catalogue["_norm_title"] == query].index.tolist()
+    if exact_matches:
+        return exact_matches[:limit]
+    
+    # If no exact matches, proceed with fuzzy matching
     choices = catalogue["_norm_title"].tolist()
-
     scored = process.extract(query, choices, scorer=fuzz.token_sort_ratio, limit=limit)
     # scored is a list of tuples (matched string, score, original index)
     return [idx for _, score, idx in scored if score >= threshold]  # adjustable threshold
