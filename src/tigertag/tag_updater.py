@@ -356,12 +356,12 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
     
     # If only one candidate, use it automatically
     if len(candidate_indices) == 1:
-        print("\n>>> Only one candidate found - using it automatically <<<")
+        # print("\n>>> Only one candidate found - using it automatically <<<")
         # print("_"*80, "\n"*5)
         return candidate_indices[0]
     
     # Display all candidates
-    print(f"\nFOUND {len(candidate_indices)} POSSIBLE MATCHES:\n")
+    # print(f"\nFOUND {len(candidate_indices)} POSSIBLE MATCHES:\n")
     
     for n, idx in enumerate(candidate_indices, 1):
         row = catalogue.loc[idx]
