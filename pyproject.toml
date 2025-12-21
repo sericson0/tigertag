@@ -12,6 +12,7 @@ dependencies = [
     "pandas>=2.3.3",
     "pyarrow>=22.0.0",
     "rapidfuzz>=3.14.3",
+    "pygame>=2.5.0",
 ]
 
 [build-system]
