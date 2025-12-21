@@ -70,6 +70,82 @@ def parse_date(date_str):
     # Clean the input
     date_str = str(date_str).strip()
     
+    # Check for "00" in month or day positions for common formats
+    # Handle dates like "00/15/2024", "01/00/2024", "00/00/2024"
+    has_zero_month = False
+    has_zero_day = False
+    
+    # Try to detect and handle "00" values before parsing
+    # Common formats: M/D/YYYY, D/M/YYYY, YYYY-M-D, etc.
+    zero_patterns = [
+        (r'^00[/-](\d{1,2})[/-](\d{4})$', 'month'),  # 00/15/2024 or 00-15-2024
+        (r'^(\d{1,2})[/-]00[/-](\d{4})$', 'day'),     # 15/00/2024 or 15-00-2024
+        (r'^00[/-]00[/-](\d{4})$', 'both'),           # 00/00/2024 or 00-00-2024
+        (r'^(\d{4})[/-]00[/-](\d{1,2})$', 'month'),   # 2024-00-15
+        (r'^(\d{4})[/-](\d{1,2})[/-]00$', 'day'),     # 2024-15-00
+        (r'^(\d{4})[/-]00[/-]00$', 'both'),           # 2024-00-00
+    ]
+    
+    year = None
+    month = None
+    day = None
+    
+    for pattern, zero_type in zero_patterns:
+        match = re.match(pattern, date_str)
+        if match:
+            if zero_type == 'month':
+                # Format: 00/D/YYYY or YYYY-00-D
+                if len(match.groups()) == 2:
+                    if date_str.startswith('00'):
+                        # 00/D/YYYY format
+                        day = int(match.group(1))
+                        year = int(match.group(2))
+                        month = 0
+                    else:
+                        # YYYY-00-D format
+                        year = int(match.group(1))
+                        day = int(match.group(2))
+                        month = 0
+            elif zero_type == 'day':
+                # Format: M/00/YYYY or YYYY-M-00
+                if len(match.groups()) == 2:
+                    if '/' in date_str or '-' in date_str:
+                        parts = re.split(r'[/-]', date_str)
+                        if len(parts) == 3:
+                            if parts[1] == '00':
+                                # M/00/YYYY format
+                                month = int(parts[0])
+                                year = int(parts[2])
+                                day = 0
+                            elif parts[2] == '00':
+                                # YYYY-M-00 format
+                                year = int(parts[0])
+                                month = int(parts[1])
+                                day = 0
+            elif zero_type == 'both':
+                # Format: 00/00/YYYY or YYYY-00-00
+                if len(match.groups()) == 1:
+                    year = int(match.group(1))
+                    month = 0
+                    day = 0
+            
+            if year is not None:
+                # Construct output string with "00" preserved
+                return f"{year:04d}-{month:02d}-{day:02d}" if month == 0 or day == 0 else f"{year:04d}-{month:02d}-{day:02d}"
+    
+    # If no "00" pattern matched, try normal parsing with temporary "01" replacement
+    # This handles edge cases where "00" might appear in other positions
+    temp_date_str = date_str
+    if '00' in date_str:
+        # Replace "00" with "01" temporarily for parsing
+        temp_date_str = date_str.replace('/00/', '/01/').replace('-00-', '-01-')
+        temp_date_str = re.sub(r'^00/', '01/', temp_date_str)
+        temp_date_str = re.sub(r'/00/', '/01/', temp_date_str)
+        temp_date_str = re.sub(r'^00-', '01-', temp_date_str)
+        temp_date_str = re.sub(r'-00-', '-01-', temp_date_str)
+        temp_date_str = re.sub(r'-00$', '-01', temp_date_str)
+        temp_date_str = re.sub(r'/00$', '/01', temp_date_str)
+    
     # List of common date formats to try
     formats = [
         '%Y-%m-%d',      # 2024-01-15
@@ -89,18 +165,64 @@ def parse_date(date_str):
         '%d.%m.%Y',      # 15.01.2024
     ]
     
-    # Try each format
+    # Try each format with the potentially modified date string
     for fmt in formats:
         try:
-            return datetime.strptime(date_str, fmt).strftime('%Y-%m-%d')
+            parsed = datetime.strptime(temp_date_str, fmt)
+            result_year = parsed.year
+            result_month = parsed.month
+            result_day = parsed.day
+            
+            # Check if we replaced "00" values and restore them
+            if '00' in date_str:
+                # Determine which component was "00" by comparing original and temp
+                original_parts = re.split(r'[/-]', date_str)
+                temp_parts = re.split(r'[/-]', temp_date_str)
+                
+                # For M/D/YYYY format
+                if fmt in ['%m/%d/%Y', '%m-%d-%Y']:
+                    if original_parts[0] == '00':
+                        result_month = 0
+                    if len(original_parts) > 1 and original_parts[1] == '00':
+                        result_day = 0
+                # For D/M/Y format
+                elif fmt in ['%d/%m/%Y', '%d-%m-%Y']:
+                    if original_parts[0] == '00':
+                        result_day = 0
+                    if len(original_parts) > 1 and original_parts[1] == '00':
+                        result_month = 0
+                # For Y/M/D format
+                elif fmt in ['%Y/%m/%d', '%Y-%m-%d']:
+                    if len(original_parts) > 1 and original_parts[1] == '00':
+                        result_month = 0
+                    if len(original_parts) > 2 and original_parts[2] == '00':
+                        result_day = 0
+            
+            return f"{result_year:04d}-{result_month:02d}-{result_day:02d}"
         except ValueError:
             continue
     
     # If none work, try pandas to_datetime as fallback (very flexible)
     try:
-        parsed = pd.to_datetime(date_str, errors='raise')
+        parsed = pd.to_datetime(temp_date_str, errors='raise')
         if pd.notna(parsed):
-            return parsed.strftime('%Y-%m-%d')
+            result_year = parsed.year
+            result_month = parsed.month
+            result_day = parsed.day
+            
+            # Restore "00" values if they existed
+            if '00' in date_str:
+                original_parts = re.split(r'[/-]', date_str)
+                if len(original_parts) >= 2:
+                    # Try to infer format from original string
+                    if date_str.count('/') == 2:
+                        parts = date_str.split('/')
+                        if parts[0] == '00':
+                            result_month = 0
+                        elif len(parts) > 1 and parts[1] == '00':
+                            result_day = 0
+            
+            return f"{result_year:04d}-{result_month:02d}-{result_day:02d}"
     except:
         pass
     
