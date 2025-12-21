@@ -75,16 +75,16 @@ class MetaData:
     def _get_lineup(self):
         lineup = ""
         if self.bandoneons != "":
-            lineup += self._count_instruments(self, self.bandoneons, default = "Bandoneon")
+            lineup += self._count_instruments(musicians = self.bandoneons, default = "Bandoneon")
         if self.strings != "":
-            lineup += self._count_instruments(self, self.strings, default = "Violin")
+            lineup += self._count_instruments(musicians = self.strings, default = "Violin")
         if self.piano != "": 
             lineup += f"Piano, "
         if self.bassist != "":
             lineup += f"Bass"
         return lineup
 
-    def _count_instruments(self, musicians: str, default = "Violin"):
+    def _count_instruments(self, musicians: str, default:str = "Violin"):
         other_instruments = {}
         default_count = 0
         lineup = ""
