@@ -656,6 +656,7 @@ class ToolGUI:
         self.folder_path = tk.StringVar()
         self.start_year = tk.StringVar(value="1935")
         self.end_year = tk.StringVar(value="1945")
+        self.filename_format = tk.StringVar(value="orchestra - title - year")  # Default format
         self.input_var = tk.StringVar()
         self.waiting_for_input = False
         self.input_result = None
@@ -687,16 +688,32 @@ class ToolGUI:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(6, weight=1)  # Changed from 5 to 6
         
-        # Folder selection
+        # Folder selection and Filename format on same row
         ttk.Label(main_frame, text="Folder:").grid(row=0, column=0, sticky=tk.W, pady=5)
         folder_frame = ttk.Frame(main_frame)
         folder_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
         folder_frame.columnconfigure(0, weight=1)
         
-        ttk.Entry(folder_frame, textvariable=self.folder_path).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
-        ttk.Button(folder_frame, text="Browse", command=self.browse_folder).grid(row=0, column=1)
+        ttk.Entry(folder_frame, textvariable=self.folder_path, width=25).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        ttk.Button(folder_frame, text="Browse", command=self.browse_folder).grid(row=0, column=1, padx=(0, 10))
+        
+        # Filename format on same row
+        ttk.Label(folder_frame, text="Format:").grid(row=0, column=2, padx=(0, 5))
+        format_options = [
+            "orchestra - title - year",
+            "orchestra last - singer last - title - year",
+            "orchestra last - title - year"
+        ]
+        format_dropdown = ttk.Combobox(
+            folder_frame,
+            textvariable=self.filename_format,
+            values=format_options,
+            state="readonly",
+            width=35
+        )
+        format_dropdown.grid(row=0, column=3, sticky=tk.W)
 
-        # Update metadata button
+        # Update metadata button on separate row
         ttk.Button(folder_frame, text="Update Metadata", command=self.update_metadata).grid(row=1, column=1, pady=5, sticky=tk.W)
         
         # Start year
@@ -707,12 +724,12 @@ class ToolGUI:
         ttk.Label(main_frame, text="End Year:").grid(row=2, column=0, sticky=tk.W, pady=5)
         ttk.Entry(main_frame, textvariable=self.end_year, width=15).grid(row=2, column=1, sticky=tk.W, pady=5)
         
-        # Artist selector
+        # Artist selector (move to row 3)
         ttk.Label(main_frame, text="Artists:").grid(row=3, column=0, sticky=(tk.W, tk.N), pady=5)
         self.artist_selector = ArtistSelectorDropdown(main_frame, self.artists)
         self.artist_selector.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=5)
         
-        # Music player
+        # Music player (move to row 4)
         ttk.Label(main_frame, text="Player:").grid(row=4, column=0, sticky=(tk.W, tk.N), pady=5)
         player_frame = ttk.LabelFrame(main_frame, text="Music Player", padding="5")
         player_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=5)
@@ -721,13 +738,13 @@ class ToolGUI:
         self.music_player = MusicPlayer(player_frame)
         self.music_player.pack(fill=tk.BOTH, expand=True)
         
-        # Run button
+        # Run button (move to row 5)
         self.run_button = ttk.Button(main_frame, text="Run Tool", command=self.run_tag_updater)
         self.run_button.grid(row=5, column=0, columnspan=2, pady=10, sticky=tk.W)
         
-        # Console output area with padding
+        # Console output area (move to row 6)
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
-        console_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)  # Changed from row=5
+        console_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         console_frame.columnconfigure(0, weight=1)
         console_frame.rowconfigure(0, weight=1)
         
@@ -897,31 +914,23 @@ class ToolGUI:
                                 audio_file, 
                                 new_metadata.title,
                                 new_metadata.orchestra,
-                                new_metadata.year)
+                                new_metadata.year,
+                                format_type=self.filename_format.get(),
+                                artist_last_name=new_metadata.artist_last_name,
+                                orchestra_last_name=new_metadata.orchestra_last_name)
                             new_filename = new_path.name
                             new_path_resolved = new_path.resolve()
                             
                             if old_path_resolved != new_path_resolved:
                                 filename_changes.append((old_filename, new_filename))
                             
-                            # Write metadata to the (possibly renamed) file
-                            # Use the new_path since the file may have been renamed
-                            try:
-                                tag_updater.write_metadata(new_path, new_metadata)
-                                print(f"Updated metadata for: {new_filename}")
-                            except Exception as meta_error:
-                                print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
-                                import traceback
-                                traceback.print_exc()
-                            
                             # Update player with new path if file was renamed
                             if old_path_resolved != new_path_resolved:
                                 self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p)))
                             
+                            tag_updater.write_metadata(new_path, new_metadata)
                         except Exception as e:
-                            print(f"Error processing {file}: {str(e)}")
-                            import traceback
-                            traceback.print_exc()
+                            print(e)
                             continue
                 
                 tag_updater.print_filename_changes_table(filename_changes)

@@ -511,7 +511,10 @@ def update_tags(audio_folder, catalogue):
                     audio_file, 
                     new_metadata.title,
                     new_metadata.orchestra,
-                    new_metadata.year)
+                    new_metadata.year,
+                    format_type="orchestra - title - year",  # Default for non-GUI usage
+                    artist_last_name=new_metadata.artist_last_name,
+                    orchestra_last_name=new_metadata.orchestra_last_name)
                 new_filename = new_path.name
                 new_path_resolved = new_path.resolve()
                 
