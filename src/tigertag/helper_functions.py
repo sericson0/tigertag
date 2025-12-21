@@ -9,16 +9,43 @@ def strip_accents(text: str) -> str:
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower()
 
 
-def update_filename(path: Path, title: str, orchestra: str = "", year: str = "") -> Path:
-    """Rename the file to a slugified version of the title, preserving the extension."""
+def update_filename(path: Path, title: str, orchestra: str = "", year: str = "", 
+                   format_type: str = "orchestra - title - year", 
+                   artist_last_name: str = "", orchestra_last_name: str = "") -> Path:
+    """Rename the file to a slugified version based on the selected format, preserving the extension."""
     if not path.is_file():
         raise ValueError(f"Path is not a file: {path}")
 
-    tag_title = title
-    if orchestra != "" and year != "":
-        tag_title = f"{orchestra} - {title} - {year}"
-    elif orchestra != "":
-        tag_title = f"{orchestra} - {title}"
+    # Build tag title based on format
+    if format_type == "orchestra - title - year":
+        if orchestra != "" and year != "":
+            tag_title = f"{orchestra} - {title} - {year}"
+        elif orchestra != "":
+            tag_title = f"{orchestra} - {title}"
+        else:
+            tag_title = title
+    elif format_type == "orchestra last name - singer last name - title - year":
+        # Use artist_last_name which already contains "orchestra_last_name - singer_last_name"
+        if artist_last_name != "" and year != "":
+            tag_title = f"{artist_last_name} - {title} - {year}"
+        elif artist_last_name != "":
+            tag_title = f"{artist_last_name} - {title}"
+        else:
+            tag_title = title
+    elif format_type == "orchestra_last_name - title - year":
+        if orchestra_last_name != "" and year != "":
+            tag_title = f"{orchestra_last_name} - {title} - {year}"
+        elif orchestra_last_name != "":
+            tag_title = f"{orchestra_last_name} - {title}"
+        else:
+            tag_title = title
+    else:
+        # Default to original behavior
+        tag_title = title
+        if orchestra != "" and year != "":
+            tag_title = f"{orchestra} - {title} - {year}"
+        elif orchestra != "":
+            tag_title = f"{orchestra} - {title}"
 
     safe_title = slugify_filename(tag_title)
 
