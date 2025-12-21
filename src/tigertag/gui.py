@@ -106,14 +106,14 @@ class MusicPlayer(tk.Frame):
             command=self.toggle_play_pause,
             bg=self.colors['primary'],
             fg='white',
-            font=('Segoe UI', 11, 'bold'),
+            font=('Segoe UI', 9, 'bold'),
             relief=tk.FLAT,
             cursor='hand2',
             width=2,
             height=0,
             bd=0,
-            padx=0,
-            pady=-5
+            padx=2,
+            pady=0
         )
         self.play_button.pack(side=tk.LEFT, padx=(0, 8))
         self._add_hover(self.play_button, self.colors['primary'], self.colors['primary_hover'])
