@@ -892,6 +892,7 @@ class ToolGUI:
                             import time
                             time.sleep(0.1)
                             
+                            # First rename the file
                             new_path = tag_updater.update_filename(
                                 audio_file, 
                                 new_metadata.title,
@@ -903,13 +904,24 @@ class ToolGUI:
                             if old_path_resolved != new_path_resolved:
                                 filename_changes.append((old_filename, new_filename))
                             
+                            # Write metadata to the (possibly renamed) file
+                            # Use the new_path since the file may have been renamed
+                            try:
+                                tag_updater.write_metadata(new_path, new_metadata)
+                                print(f"Updated metadata for: {new_filename}")
+                            except Exception as meta_error:
+                                print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
+                                import traceback
+                                traceback.print_exc()
+                            
                             # Update player with new path if file was renamed
                             if old_path_resolved != new_path_resolved:
                                 self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p)))
                             
-                            tag_updater.write_metadata(new_path, new_metadata)
                         except Exception as e:
-                            print(e)
+                            print(f"Error processing {file}: {str(e)}")
+                            import traceback
+                            traceback.print_exc()
                             continue
                 
                 tag_updater.print_filename_changes_table(filename_changes)
