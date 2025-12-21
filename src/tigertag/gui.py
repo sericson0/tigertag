@@ -42,7 +42,7 @@ class ConsoleRedirect:
         pass
 
 class MusicPlayer(tk.Frame):
-    """A music player widget with play/pause, volume, and position controls"""
+    """A compact, modern music player widget - all controls on one line"""
     
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
@@ -55,120 +55,137 @@ class MusicPlayer(tk.Frame):
         self.is_playing = False
         self.is_paused = False
         self.volume = 0.7  # Default volume (0.0 to 1.0)
+        self.saved_volume = 0.7  # Volume before mute
+        self.is_muted = False
         self.position = 0  # Current position in seconds
         self.duration = 0  # Total duration in seconds
         self.update_thread = None
         self.stop_update = False
         
-        # Colors
+        # Modern color scheme
         self.colors = {
-            'bg': '#f0f0f0',
-            'text': '#333333',
-            'button': '#007acc',
-            'button_hover': '#005a9e',
+            'bg': '#ffffff',
+            'bg_alt': '#f8f9fa',
+            'text': '#212529',
+            'text_secondary': '#6c757d',
+            'primary': '#0d6efd',
+            'primary_hover': '#0b5ed7',
+            'success': '#198754',
+            'success_hover': '#157347',
+            'danger': '#dc3545',
+            'danger_hover': '#bb2d3b',
+            'border': '#dee2e6',
+            'slider_bg': '#e9ecef',
+            'slider_active': '#000000',  # Black slider
         }
         
-        self.configure(bg=self.colors['bg'])
+        self.configure(bg=self.colors['bg'], height=50)
         self.create_widgets()
         
     def create_widgets(self):
-        """Create the player UI elements"""
-        # Main container
-        main_frame = tk.Frame(self, bg=self.colors['bg'])
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # File info label
-        self.file_label = tk.Label(
-            main_frame,
-            text="No file loaded",
+        """Create a compact single-line player UI"""
+        # Main container with subtle border
+        main_frame = tk.Frame(
+            self, 
             bg=self.colors['bg'],
-            fg=self.colors['text'],
-            font=('Segoe UI', 9),
-            anchor='w',
-            wraplength=400
+            highlightthickness=1,
+            highlightbackground=self.colors['border'],
+            relief=tk.FLAT
         )
-        self.file_label.pack(fill=tk.X, pady=(0, 10))
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         
-        # Control buttons frame
-        controls_frame = tk.Frame(main_frame, bg=self.colors['bg'])
-        controls_frame.pack(fill=tk.X, pady=5)
+        # Single horizontal row for all controls
+        controls_row = tk.Frame(main_frame, bg=self.colors['bg'])
+        controls_row.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
         
-        # Play/Pause button
+        # Play/Pause button (circular style)
         self.play_button = tk.Button(
-            controls_frame,
+            controls_row,
             text="▶",
             command=self.toggle_play_pause,
-            bg=self.colors['button'],
+            bg=self.colors['primary'],
             fg='white',
-            font=('Segoe UI', 14),
+            font=('Segoe UI', 11, 'bold'),
             relief=tk.FLAT,
             cursor='hand2',
-            width=3,
-            height=1
+            width=2,
+            height=1,
+            bd=0,
+            padx=0,
+            pady=0
         )
-        self.play_button.pack(side=tk.LEFT, padx=(0, 5))
-        self._add_hover(self.play_button, self.colors['button'], self.colors['button_hover'])
+        self.play_button.pack(side=tk.LEFT, padx=(0, 8))
+        self._add_hover(self.play_button, self.colors['primary'], self.colors['primary_hover'])
         
-        # Stop button
-        self.stop_button = tk.Button(
-            controls_frame,
-            text="⏹",
-            command=self.stop,
-            bg='#6c757d',
-            fg='white',
-            font=('Segoe UI', 14),
-            relief=tk.FLAT,
-            cursor='hand2',
-            width=3,
-            height=1
-        )
-        self.stop_button.pack(side=tk.LEFT, padx=(0, 10))
-        self._add_hover(self.stop_button, '#6c757d', '#5a6268')
-        
-        # Position slider
-        position_frame = tk.Frame(main_frame, bg=self.colors['bg'])
-        position_frame.pack(fill=tk.X, pady=5)
-        
+        # Position slider (reduced width)
         self.position_var = tk.DoubleVar(value=0)
         self.position_slider = tk.Scale(
-            position_frame,
+            controls_row,
             from_=0,
             to=100,
             orient=tk.HORIZONTAL,
             variable=self.position_var,
             command=self.on_position_change,
             bg=self.colors['bg'],
+            fg=self.colors['text'],
             highlightthickness=0,
-            length=300
+            troughcolor=self.colors['slider_bg'],
+            activebackground=self.colors['slider_active'],
+            length=140,  # Reduced from 180
+            sliderrelief=tk.FLAT,
+            borderwidth=0,
+            width=4,  # Set to 4
+            showvalue=0
         )
-        self.position_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        self.position_slider.pack(side=tk.LEFT, padx=(0, 6))
         
-        # Time label
+        # Time label (compact)
         self.time_label = tk.Label(
-            position_frame,
+            controls_row,
             text="0:00 / 0:00",
             bg=self.colors['bg'],
-            fg=self.colors['text'],
-            font=('Segoe UI', 9),
-            width=12
+            fg=self.colors['text_secondary'],
+            font=('Segoe UI', 8),
+            width=10,
+            anchor='w'
         )
-        self.time_label.pack(side=tk.LEFT)
+        self.time_label.pack(side=tk.LEFT, padx=(0, 10))
         
-        # Volume control frame
-        volume_frame = tk.Frame(main_frame, bg=self.colors['bg'])
-        volume_frame.pack(fill=tk.X, pady=5)
+        # Volume icon and slider (compact)
+        volume_container = tk.Frame(controls_row, bg=self.colors['bg'])
+        volume_container.pack(side=tk.LEFT, padx=(0, 6))
         
-        tk.Label(
-            volume_frame,
-            text="Volume:",
+        # Clickable volume icon with mute overlay
+        self.volume_icon_frame = tk.Frame(volume_container, bg=self.colors['bg'], cursor='hand2')
+        self.volume_icon_frame.pack(side=tk.LEFT, padx=(0, 4))
+        
+        self.volume_icon = tk.Label(
+            self.volume_icon_frame,
+            text="🔊",
             bg=self.colors['bg'],
-            fg=self.colors['text'],
-            font=('Segoe UI', 9)
-        ).pack(side=tk.LEFT, padx=(0, 5))
+            font=('Segoe UI', 10)
+        )
+        self.volume_icon.pack()
+        
+        # Mute overlay (X symbol) - hidden by default
+        self.mute_overlay = tk.Label(
+            self.volume_icon_frame,
+            text="✕",
+            bg=self.colors['bg'],
+            fg=self.colors['danger'],
+            font=('Segoe UI', 12, 'bold')
+        )
+        self.mute_overlay.place(relx=0.5, rely=0.5, anchor='center')
+        self.mute_overlay.place_forget()  # Hide initially
+        
+        # Bind click event to toggle mute
+        self.volume_icon_frame.bind('<Button-1>', lambda e: self.toggle_mute())
+        self.volume_icon.bind('<Button-1>', lambda e: self.toggle_mute())
+        self.mute_overlay.bind('<Button-1>', lambda e: self.toggle_mute())
         
         self.volume_var = tk.DoubleVar(value=self.volume * 100)
         self.volume_slider = tk.Scale(
-            volume_frame,
+            volume_container,
             from_=0,
             to=100,
             orient=tk.HORIZONTAL,
@@ -176,40 +193,100 @@ class MusicPlayer(tk.Frame):
             command=self.on_volume_change,
             bg=self.colors['bg'],
             highlightthickness=0,
-            length=200
+            troughcolor=self.colors['slider_bg'],
+            activebackground=self.colors['slider_active'],
+            length=60,  # Reduced from 80
+            sliderrelief=tk.FLAT,
+            borderwidth=0,
+            width=8,  # Reduced from 10
+            showvalue=0
         )
-        self.volume_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.volume_slider.pack(side=tk.LEFT)
         
         self.volume_label = tk.Label(
-            volume_frame,
+            volume_container,
             text="70%",
             bg=self.colors['bg'],
-            fg=self.colors['text'],
-            font=('Segoe UI', 9),
-            width=5
+            fg=self.colors['text_secondary'],
+            font=('Segoe UI', 8),
+            width=4,
+            anchor='w'
         )
-        self.volume_label.pack(side=tk.LEFT, padx=(5, 0))
+        self.volume_label.pack(side=tk.LEFT, padx=(4, 0))
+        
+        # File name label (truncated, on the right)
+        self.file_label = tk.Label(
+            controls_row,
+            text="No file loaded",
+            bg=self.colors['bg'],
+            fg=self.colors['text'],
+            font=('Segoe UI', 8),
+            anchor='w',
+            width=30
+        )
+        self.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
     
     def _add_hover(self, button, normal_color, hover_color):
-        """Add hover effect to button"""
-        button.bind('<Enter>', lambda e: button.config(bg=hover_color))
-        button.bind('<Leave>', lambda e: button.config(bg=normal_color))
+        """Add smooth hover effect to button"""
+        def on_enter(e):
+            button.config(bg=hover_color)
+        def on_leave(e):
+            button.config(bg=normal_color)
+        button.bind('<Enter>', on_enter)
+        button.bind('<Leave>', on_leave)
+    
+    def toggle_mute(self):
+        """Toggle mute on/off"""
+        if self.is_muted:
+            # Unmute: restore saved volume
+            self.is_muted = False
+            self.volume = self.saved_volume
+            pygame.mixer.music.set_volume(self.volume)
+            self.volume_var.set(self.volume * 100)
+            self.volume_label.config(text=f"{int(self.volume * 100)}%")
+            self.mute_overlay.place_forget()
+        else:
+            # Mute: save current volume and set to 0
+            if self.volume > 0:
+                self.saved_volume = self.volume
+            self.is_muted = True
+            pygame.mixer.music.set_volume(0.0)
+            self.mute_overlay.place(relx=0.5, rely=0.5, anchor='center')
+    
+    def unload_file(self):
+        """Unload the current file to release file handle"""
+        try:
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()  # Unload the current music
+            self.is_playing = False
+            self.is_paused = False
+            self.position = 0
+            self.position_var.set(0)
+            self.play_button.config(text="▶")
+            self.stop_update = True
+            self.current_file = None
+        except Exception as e:
+            print(f"Error unloading file: {str(e)}")
     
     def load_file(self, file_path):
         """Load an audio file for playback"""
         if not file_path or not Path(file_path).exists():
             return
         
-        # Stop current playback
-        self.stop()
+        # Unload current file first to release file handle
+        self.unload_file()
         
         self.current_file = Path(file_path)
-        self.file_label.config(text=f"Now playing: {self.current_file.name}")
+        # Truncate filename if too long
+        filename = self.current_file.name
+        if len(filename) > 35:
+            filename = filename[:32] + "..."
+        self.file_label.config(text=filename, fg=self.colors['text'])
         
         # Load the file
         try:
             pygame.mixer.music.load(str(self.current_file))
-            # Get duration using mutagen (already imported in the project)
+            # Get duration using mutagen
             from mutagen import File as MutagenFile
             audio_file = MutagenFile(self.current_file)
             if audio_file:
@@ -223,7 +300,7 @@ class MusicPlayer(tk.Frame):
             self.position_var.set(0)
             self.update_time_label()
         except Exception as e:
-            self.file_label.config(text=f"Error loading file: {str(e)}")
+            self.file_label.config(text=f"Error: {str(e)[:30]}", fg=self.colors['danger'])
     
     def toggle_play_pause(self):
         """Toggle between play and pause"""
@@ -244,7 +321,6 @@ class MusicPlayer(tk.Frame):
             if self.is_paused:
                 pygame.mixer.music.unpause()
             else:
-                # Seek to current position if needed
                 if self.position > 0:
                     pygame.mixer.music.play(start=self.position)
                 else:
@@ -260,7 +336,7 @@ class MusicPlayer(tk.Frame):
                 self.update_thread = threading.Thread(target=self.update_position, daemon=True)
                 self.update_thread.start()
         except Exception as e:
-            self.file_label.config(text=f"Error playing: {str(e)}")
+            self.file_label.config(text=f"Error: {str(e)[:30]}", fg=self.colors['danger'])
     
     def pause(self):
         """Pause playback"""
@@ -282,9 +358,16 @@ class MusicPlayer(tk.Frame):
     
     def on_volume_change(self, value):
         """Handle volume slider change"""
-        self.volume = float(value) / 100.0
-        pygame.mixer.music.set_volume(self.volume)
-        self.volume_label.config(text=f"{int(self.volume * 100)}%")
+        if not self.is_muted:
+            self.volume = float(value) / 100.0
+            self.saved_volume = self.volume
+            pygame.mixer.music.set_volume(self.volume)
+            self.volume_label.config(text=f"{int(self.volume * 100)}%")
+        else:
+            # If muted, update saved volume but don't change actual volume
+            self.saved_volume = float(value) / 100.0
+            self.volume_var.set(self.saved_volume * 100)
+            self.volume_label.config(text=f"{int(self.saved_volume * 100)}%")
     
     def on_position_change(self, value):
         """Handle position slider change (seeking)"""
@@ -308,8 +391,6 @@ class MusicPlayer(tk.Frame):
         """Update position slider and time label while playing"""
         while not self.stop_update and (self.is_playing or self.is_paused):
             if self.is_playing and pygame.mixer.music.get_busy():
-                # Estimate position (pygame doesn't provide exact position)
-                # We'll increment based on time elapsed
                 time.sleep(0.1)
                 self.position += 0.1
                 if self.position > self.duration:
@@ -349,7 +430,7 @@ class MusicPlayer(tk.Frame):
     def cleanup(self):
         """Clean up resources"""
         self.stop_update = True
-        self.stop()
+        self.unload_file()
         pygame.mixer.quit()
 
 class ArtistSelectorDropdown(tk.Frame):
@@ -800,6 +881,13 @@ class ToolGUI:
                         try:
                             old_filename = audio_file.name
                             old_path_resolved = audio_file.resolve()
+                            
+                            # Unload file from player before renaming to avoid file lock
+                            self.root.after(0, lambda: self.music_player.unload_file())
+                            # Small delay to ensure file is released
+                            import time
+                            time.sleep(0.1)
+                            
                             new_path = tag_updater.update_filename(
                                 audio_file, 
                                 new_metadata.title,
@@ -813,7 +901,7 @@ class ToolGUI:
                             
                             # Update player with new path if file was renamed
                             if old_path_resolved != new_path_resolved:
-                                self.root.after(0, lambda: self.music_player.load_file(str(new_path)))
+                                self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p)))
                             
                             tag_updater.write_metadata(new_path, new_metadata)
                         except Exception as e:
