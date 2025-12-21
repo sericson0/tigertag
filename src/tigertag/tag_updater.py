@@ -399,7 +399,43 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
 # csv_path = main_folder + "/Discography of Osvaldo Pugliese.csv"
 # df = load_catalogue(csv_path)
 
+def print_filename_changes_table(filename_changes: List[tuple]) -> None:
+    """Print a formatted table showing all filename changes."""
+    if not filename_changes:
+        print("\n" + "=" * 80)
+        print("No filename changes were made.")
+        print("=" * 80 + "\n")
+        return
+    
+    print("\n" + "=" * 80)
+    print("FILENAME CHANGES SUMMARY")
+    print("=" * 80)
+    
+    # Calculate column widths
+    max_old_len = max(len(old) for old, _ in filename_changes) if filename_changes else 0
+    max_new_len = max(len(new) for _, new in filename_changes) if filename_changes else 0
+    
+    # Ensure minimum widths for headers
+    old_width = max(max_old_len, len("Old Filename"))
+    new_width = max(max_new_len, len("New Filename"))
+    
+    # Print header
+    header = f"{'Old Filename':<{old_width}}  →  {'New Filename':<{new_width}}"
+    print(header)
+    print("-" * len(header))
+    
+    # Print each change
+    for old_name, new_name in filename_changes:
+        print(f"{old_name:<{old_width}}  →  {new_name:<{new_width}}")
+    
+    print("=" * 80)
+    print(f"Total files renamed: {len(filename_changes)}")
+    print("=" * 80 + "\n")
+
+
 def update_tags(audio_folder, catalogue):
+    filename_changes = []  # List of tuples: (old_filename, new_filename)
+    
     for file in os.listdir(audio_folder):
         if not file.endswith(('.mp3', '.flac', '.m4a', '.mp4', "aif")):
         # if not file.endswith(('.mp3')):
@@ -412,14 +448,27 @@ def update_tags(audio_folder, catalogue):
         if chosen_idx != 9999:
             new_metadata = get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
             try:
+                old_filename = audio_file.name
+                old_path_resolved = audio_file.resolve()
                 new_path = update_filename(
                     audio_file, 
                     new_metadata.title,
                     new_metadata.orchestra,
                     new_metadata.year)
+                new_filename = new_path.name
+                new_path_resolved = new_path.resolve()
+                
+                # Track filename change only if file was actually renamed
+                # (resolved paths differ, meaning an actual rename occurred)
+                if old_path_resolved != new_path_resolved:
+                    filename_changes.append((old_filename, new_filename))
+                
                 write_metadata(new_path, new_metadata)
             except Exception as e:
                 print(e)
                 continue
+    
+    # Print summary table at the end
+    print_filename_changes_table(filename_changes)
     print("\n\n >>> Finished updating folder! <<< \n\n\n")
 
