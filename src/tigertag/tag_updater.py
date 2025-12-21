@@ -45,11 +45,15 @@ class MetaData:
     lineup    : str = None
     comment   : str = None
     artist    : str = None
+    orchestra_last_name : str = None
+    singer_last_name : str = None
     artist_last_name : str = None
     
     def __post_init__(self):
         self.artist = f"{self.orchestra} - {self.singer}"
-        self.artist_last_name = f"{self._get_last_name(self.orchestra)} - {self._get_last_name(self.singer)}"
+        self.orchestra_last_name = self._get_last_name(self.orchestra)
+        self.singer_last_name = self._get_last_name(self.singer)
+        self.artist_last_name = f"{self.orchestra_last_name} - {self.singer_last_name}"
         self.lineup = self._get_lineup()
         comment = ""
         for val in ["orchestra", "singer", "date", "label", "grouping", "master", "composer", "author", "pianist",
@@ -57,7 +61,7 @@ class MetaData:
             if getattr(self, val) != "":
                 comment += f"{val.capitalize()}: {getattr(self, val)}\n"
         self.comment = self._build_comment()
-        
+
     def _build_comment(self):
         comment = f"Orchestra: {self.orchestra}, Singer: {self.singer}\n"
         comment += f"Date: {self.date}, Grouping: {self.grouping}\n"
