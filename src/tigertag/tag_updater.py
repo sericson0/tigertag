@@ -42,16 +42,85 @@ class MetaData:
     bassist   : str = ""
     bandoneons: str = ""
     strings   : str = ""
+    lineup    : str = None
     comment   : str = None
     artist    : str = None
+    artist_last_name : str = None
+    
     def __post_init__(self):
         self.artist = f"{self.orchestra} - {self.singer}"
+        self.artist_last_name = f"{self._get_last_name(self.orchestra)} - {self._get_last_name(self.singer)}"
+        self.lineup = self._get_lineup()
         comment = ""
         for val in ["orchestra", "singer", "date", "label", "grouping", "master", "composer", "author", "pianist",
                   "bassist", "bandoneons", "strings"]:
             if getattr(self, val) != "":
                 comment += f"{val.capitalize()}: {getattr(self, val)}\n"
-        self.comment = comment
+        self.comment = self._build_comment()
+        
+    def _build_comment(self):
+        comment = f"Orchestra: {self.orchestra}, Singer: {self.singer}\n"
+        comment += f"Date: {self.date}, Grouping: {self.grouping}\n"
+        comment += f"Composer: {self.composer}, Author: {self.author}\n"
+        comment += self.lineup + "\n"
+        comment += f"Label: {self.label}, Master: {self.master}\n"
+        for val in ["pianist", "bassist", "bandoneons", "strings"]:
+            if getattr(self, val) != "":
+                comment += f"{val.capitalize()}: {getattr(self, val)}\n"
+        return comment
+    def _get_lineup(self):
+        lineup = ""
+        if self.bandoneons != "":
+            lineup += self._count_instruments(self, self.bandoneons, default = "Bandoneon")
+        if self.strings != "":
+            lineup += self._count_instruments(self, self.strings, default = "Violin")
+        if self.piano != "": 
+            lineup += f"Piano, "
+        if self.bassist != "":
+            lineup += f"Bass"
+        return lineup
+
+    def _count_instruments(self, musicians: str, default = "Violin"):
+        other_instruments = {}
+        default_count = 0
+        lineup = ""
+        for player in musicians.split(","):
+            # Check if player has instrument in parentheses
+            if "(" in player and ")" in player:
+                # Extract instrument name from parentheses
+                start = player.rfind("(")
+                end = player.rfind(")")
+                if start < end:
+                    instrument = player[start+1:end].strip()
+                    instrument = instrument.capitalize()
+                    other_instruments[instrument] = other_instruments.get(instrument, 0) + 1
+            else:
+                default_count += 1
+        if default_count == 1:
+            lineup += f"{default}, "
+        elif default_count > 1:
+            lineup += f"{default_count} {default}s, "
+        for instrument, count in other_instruments.items():
+            if count > 1:
+                lineup += f"{count} {instrument}s, "
+            else:
+                lineup += f"{instrument}, "
+        return lineup
+    def _get_last_name(self, name: str):
+        prefixes = {"De", "Di", "Del", "Della", "Dell", "Da", "Dos"}
+        parts = name.strip().split()
+        if len(parts) == 0:
+            return ""
+        elif len(parts) == 1:
+            return parts[0]
+        last_name = parts[-1]
+        if len(parts) >= 2:
+            second_to_last = parts[-2]
+            if second_to_last in prefixes:
+                return f"{second_to_last} {last_name}"
+        
+        return last_name
+
 
 def get_updated_metadata(dct: dict):
     dct = {k.lower(): v for k, v in dct.items()}
@@ -169,22 +238,6 @@ def preview_diff(old: Dict[str, str], new: Dict[str, str]) -> None:
         mark = "✓" if old_val != new_val else " "
         print(f" {mark} {key.capitalize():12} : '{old_val}' → '{new_val}'")
     print(" ──────────────────────────────────────────────────────────\n")
-
-# def save_mp3_metadata(path: Path, new_meta: MetaData) -> None:
-#     audio = EasyID3(path)
-#     audio["title"] = new_meta.title
-#     audio["artist"] = new_meta.artist
-#     audio["genre"] = new_meta.genre
-#     audio["date"] = new_meta.year
-#     audio["grouping"] = [new_meta.grouping]
-#     audio["composer"] = [new_meta.composer]
-#     audio["comment"] = new_meta.comment
-#     audio["remixer"] = [audio.get("publisher", [""])[0]]          # Now works!
-#     # audio["MixArtist"] = 
-#     # Clear label and set new publisher
-#     audio["publisher"] = new_meta.label
-#     audio.save(v2_version=3)   # ID3v2.3 for maximum compatibility
-
 
 def save_mp3_metadata(path: Path, new_meta: MetaData) -> None:
     """Write metadata to MP3 using regular ID3 (all fields supported)."""
