@@ -68,15 +68,16 @@ class MusicPlayer(tk.Frame):
             'bg_alt': '#f8f9fa',
             'text': '#212529',
             'text_secondary': '#6c757d',
-            'primary': '#0d6efd',
-            'primary_hover': '#0b5ed7',
+            'primary': '#FF8C42',
+            'primary_hover': '#FF6B1A',
             'success': '#198754',
             'success_hover': '#157347',
             'danger': '#dc3545',
             'danger_hover': '#bb2d3b',
             'border': '#dee2e6',
-            'slider_bg': '#e9ecef',
-            'slider_active': '#000000',  # Black slider
+            'slider_bg': '#e9ecef',  # Gray background for slider track
+            'slider_normal': '#FF8C42',  # Light orange for slider thumb (not hovered)
+            'slider_active': '#FF6B1A',  # Darker orange for slider thumb (hovered/active)
         }
         
         self.configure(bg=self.colors['bg'], height=50)
@@ -109,15 +110,14 @@ class MusicPlayer(tk.Frame):
             relief=tk.FLAT,
             cursor='hand2',
             width=2,
-            height=1,
+            height=0,
             bd=0,
             padx=0,
-            pady=0
+            pady=-5
         )
         self.play_button.pack(side=tk.LEFT, padx=(0, 8))
         self._add_hover(self.play_button, self.colors['primary'], self.colors['primary_hover'])
         
-        # Position slider (reduced width)
         self.position_var = tk.DoubleVar(value=0)
         self.position_slider = tk.Scale(
             controls_row,
@@ -129,12 +129,14 @@ class MusicPlayer(tk.Frame):
             bg=self.colors['bg'],
             fg=self.colors['text'],
             highlightthickness=0,
-            troughcolor=self.colors['slider_bg'],
-            activebackground=self.colors['slider_active'],
-            length=140,  # Reduced from 180
+            troughcolor=self.colors['slider_bg'],  # Gray background
+            background=self.colors['slider_normal'],  # Light orange when not hovered
+            activebackground=self.colors['slider_active'],  # Darker orange when hovered/active
+            length=100,  
+            sliderlength=15, 
             sliderrelief=tk.FLAT,
             borderwidth=0,
-            width=4,  # Set to 4
+            width=12, 
             showvalue=0
         )
         self.position_slider.pack(side=tk.LEFT, padx=(0, 6))
@@ -170,8 +172,8 @@ class MusicPlayer(tk.Frame):
         # Mute overlay (X symbol) - hidden by default
         self.mute_overlay = tk.Label(
             self.volume_icon_frame,
-            text="✕",
-            bg=self.colors['bg'],
+            text="🔇",
+            # bg=self.colors['bg'],
             fg=self.colors['danger'],
             font=('Segoe UI', 12, 'bold')
         )
@@ -193,12 +195,14 @@ class MusicPlayer(tk.Frame):
             command=self.on_volume_change,
             bg=self.colors['bg'],
             highlightthickness=0,
-            troughcolor=self.colors['slider_bg'],
-            activebackground=self.colors['slider_active'],
-            length=60,  # Reduced from 80
+            troughcolor=self.colors['slider_bg'],  # Gray background
+            background=self.colors['slider_normal'],  # Light orange when not hovered
+            activebackground=self.colors['slider_active'],  # Darker orange when hovered/active
+            length=72,  # 20% longer: 60 * 1.2 = 72
             sliderrelief=tk.FLAT,
             borderwidth=0,
-            width=8,  # Reduced from 10
+            width=12,  # Increased slider bar width
+            sliderlength=15,
             showvalue=0
         )
         self.volume_slider.pack(side=tk.LEFT)
@@ -935,5 +939,7 @@ if __name__ == "__main__":
     artists = metadata_dict.keys()
     app = ToolGUI(root, artists=artists, metadata_dict=metadata_dict)
     root.mainloop()
+
+    
 
     
