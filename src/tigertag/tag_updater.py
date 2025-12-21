@@ -78,7 +78,7 @@ class MetaData:
             lineup += self._count_instruments(musicians = self.bandoneons, default = "Bandoneon")
         if self.strings != "":
             lineup += self._count_instruments(musicians = self.strings, default = "Violin")
-        if self.piano != "": 
+        if self.pianist != "": 
             lineup += f"Piano, "
         if self.bassist != "":
             lineup += f"Bass"
