@@ -656,7 +656,7 @@ class ToolGUI:
         self.folder_path = tk.StringVar()
         self.start_year = tk.StringVar(value="1900")
         self.end_year = tk.StringVar(value="2050")
-        self.filename_format = tk.StringVar(value="title - orchestra last - singer last - year")  # Default format
+        self.filename_format = tk.StringVar(value="orchestra last - title - singer last - year")  # Default format
         self.input_var = tk.StringVar()
         self.waiting_for_input = False
         self.input_result = None
@@ -703,8 +703,10 @@ class ToolGUI:
             "title - orchestra last - singer last - year",
             "title - orchestra last - year",
             "title - orchestra - year",
+            "orchestra last - title - singer last - year",
             "orchestra last - singer last - title - year",
             "orchestra last - title - year",
+            "orchestra - title - singer last - year",
             "orchestra - title - year",
         ]
         format_dropdown = ttk.Combobox(
@@ -919,8 +921,9 @@ class ToolGUI:
                                 new_metadata.orchestra,
                                 new_metadata.year,
                                 format_type=self.filename_format.get(),
-                                artist_last_name=new_metadata.artist_last_name,
-                                orchestra_last_name=new_metadata.orchestra_last_name)
+                                orchestra_last_name=new_metadata.orchestra_last_name,
+                                singer_last_name=new_metadata.singer_last_name,
+                                )
                             new_filename = new_path.name
                             new_path_resolved = new_path.resolve()
                             

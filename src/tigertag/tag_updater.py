@@ -47,13 +47,11 @@ class MetaData:
     artist    : str = None
     orchestra_last_name : str = None
     singer_last_name : str = None
-    artist_last_name : str = None
     
     def __post_init__(self):
         self.artist = f"{self.orchestra} - {self.singer}"
         self.orchestra_last_name = self._get_last_name(self.orchestra)
         self.singer_last_name = self._get_last_name(self.singer)
-        self.artist_last_name = f"{self.orchestra_last_name} - {self.singer_last_name}"
         self.lineup = self._get_lineup()
         comment = ""
         for val in ["orchestra", "singer", "date", "label", "grouping", "master", "composer", "author", "pianist",
@@ -513,8 +511,9 @@ def update_tags(audio_folder, catalogue):
                     new_metadata.orchestra,
                     new_metadata.year,
                     format_type="orchestra - title - year",  # Default for non-GUI usage
-                    artist_last_name=new_metadata.artist_last_name,
-                    orchestra_last_name=new_metadata.orchestra_last_name)
+                    orchestra_last_name=new_metadata.orchestra_last_name,
+                    singer_last_name=new_metadata.singer_last_name,
+                    )
                 new_filename = new_path.name
                 new_path_resolved = new_path.resolve()
                 
