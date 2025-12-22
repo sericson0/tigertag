@@ -654,9 +654,9 @@ class ToolGUI:
         
         # Variables
         self.folder_path = tk.StringVar()
-        self.start_year = tk.StringVar(value="1935")
-        self.end_year = tk.StringVar(value="1945")
-        self.filename_format = tk.StringVar(value="orchestra - title - year")  # Default format
+        self.start_year = tk.StringVar(value="1900")
+        self.end_year = tk.StringVar(value="2050")
+        self.filename_format = tk.StringVar(value="title - orchestra last - singer last - year")  # Default format
         self.input_var = tk.StringVar()
         self.waiting_for_input = False
         self.input_result = None
@@ -700,9 +700,12 @@ class ToolGUI:
         # Filename format on same row
         ttk.Label(folder_frame, text="Format:").grid(row=0, column=2, padx=(0, 5))
         format_options = [
-            "orchestra - title - year",
+            "title - orchestra last - singer last - year",
+            "title - orchestra last - year",
+            "title - orchestra - year",
             "orchestra last - singer last - title - year",
-            "orchestra last - title - year"
+            "orchestra last - title - year",
+            "orchestra - title - year",
         ]
         format_dropdown = ttk.Combobox(
             folder_frame,

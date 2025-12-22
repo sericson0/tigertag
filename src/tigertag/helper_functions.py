@@ -39,6 +39,28 @@ def update_filename(path: Path, title: str, orchestra: str = "", year: str = "",
             tag_title = f"{orchestra_last_name} - {title}"
         else:
             tag_title = title
+    elif format_type == "title - orchestra - year":
+        if title != "" and orchestra != "" and year != "":
+            tag_title = f"{title} - {orchestra} - {year}"
+        elif title != "" and orchestra != "":
+            tag_title = f"{title} - {orchestra}"
+        else:
+            tag_title = title
+    elif format_type == "title - orchestra last - year":
+        if title != "" and orchestra_last_name != "" and year != "":
+            tag_title = f"{title} - {orchestra_last_name} - {year}"
+        elif title != "" and orchestra_last_name != "":
+            tag_title = f"{title} - {orchestra_last_name}"
+        else:
+            tag_title = title
+    elif format_type == "title - orchestra last - singer last - year":
+        # Use artist_last_name which already contains "orchestra_last_name - singer_last_name"
+        if title != "" and artist_last_name != "" and year != "":
+            tag_title = f"{title} - {artist_last_name} - {year}"
+        elif title != "" and artist_last_name != "":
+            tag_title = f"{title} - {artist_last_name}"
+        else:
+            tag_title = title
     else:
         # Default to original behavior
         tag_title = title
