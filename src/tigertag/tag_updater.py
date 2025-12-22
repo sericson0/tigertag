@@ -243,32 +243,44 @@ def preview_diff(old: Dict[str, str], new: Dict[str, str]) -> None:
 
 def save_mp3_metadata(path: Path, new_meta: MetaData) -> None:
     """Write metadata to MP3 using regular ID3 (all fields supported)."""
-    try:
-        audio = ID3(path)
-    except:
-        # If no ID3 tag exists, create one
-        audio = ID3()
+    max_retries = 3
+    retry_delay = 0.2
     
-    # Standard fields
-    audio.add(TIT2(encoding=3, text=new_meta.title))        # Title
-    audio.add(TPE1(encoding=3, text=new_meta.artist))       # Artist
-    audio.add(TCON(encoding=3, text=new_meta.genre))        # Genre
-    audio.add(TDRC(encoding=3, text=new_meta.year))         # Date/Year
-    audio.add(TCOM(encoding=3, text=new_meta.composer))     # Composer
-    # Get existing label/publisher
-    old_label = ""
-    if 'TPUB' in audio:
-        old_label = str(audio['TPUB'].text[0])
-    # Move old label to remixer field (TPE3)
-    if old_label:
-        audio.add(TPE4(encoding=3, text=old_label))
-    # audio.add(TPE3(encoding=3, text=audionew_meta.label))         # Remixer
-    audio.add(TIT1(encoding=3, text=new_meta.grouping))     # Grouping/Content Group
-    audio.add(TPUB(encoding=3, text=new_meta.label))
-    # Comment (requires special structure)
-    audio.add(COMM(encoding=3, lang='eng', desc='', text=new_meta.comment))
-    
-    audio.save(path, v2_version=3)
+    for attempt in range(max_retries):
+        try:
+            audio = ID3(path)
+        except:
+            # If no ID3 tag exists, create one
+            audio = ID3()
+        
+        # Standard fields
+        audio.add(TIT2(encoding=3, text=new_meta.title))        # Title
+        audio.add(TPE1(encoding=3, text=new_meta.artist))       # Artist
+        audio.add(TCON(encoding=3, text=new_meta.genre))        # Genre
+        audio.add(TDRC(encoding=3, text=new_meta.year))         # Date/Year
+        audio.add(TCOM(encoding=3, text=new_meta.composer))     # Composer
+        # Get existing label/publisher
+        old_label = ""
+        if 'TPUB' in audio:
+            old_label = str(audio['TPUB'].text[0])
+        # Move old label to remixer field (TPE3)
+        if old_label:
+            audio.add(TPE4(encoding=3, text=old_label))
+        audio.add(TIT1(encoding=3, text=new_meta.grouping))     # Grouping/Content Group
+        audio.add(TPUB(encoding=3, text=new_meta.label))
+        # Comment (requires special structure)
+        audio.add(COMM(encoding=3, lang='eng', desc='', text=new_meta.comment))
+        
+        try:
+            audio.save(path, v2_version=3)
+            return  # Success, exit retry loop
+        except PermissionError:
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+                continue
+            else:
+                raise
 
 def save_m4a_metadata(path: Path, new_meta: MetaData) -> None:
     audio = MP4(path)
@@ -505,6 +517,14 @@ def update_tags(audio_folder, catalogue):
             try:
                 old_filename = audio_file.name
                 old_path_resolved = audio_file.resolve()
+                
+                # Unload file from player before any file operations
+                # self.root.after(0, lambda: self.music_player.unload_file()) # This line is from gui.py, not tag_updater.py
+                # Wait longer to ensure file is fully released
+                import time
+                time.sleep(0.3)  # Increased delay
+                
+                # First rename the file
                 new_path = update_filename(
                     audio_file, 
                     new_metadata.title,
@@ -517,14 +537,37 @@ def update_tags(audio_folder, catalogue):
                 new_filename = new_path.name
                 new_path_resolved = new_path.resolve()
                 
-                # Track filename change only if file was actually renamed
-                # (resolved paths differ, meaning an actual rename occurred)
                 if old_path_resolved != new_path_resolved:
                     filename_changes.append((old_filename, new_filename))
                 
-                write_metadata(new_path, new_metadata)
+                # Ensure file is not loaded in player before writing metadata
+                # self.root.after(0, lambda: self.music_player.unload_file()) # This line is from gui.py, not tag_updater.py
+                time.sleep(0.2)  # Additional delay before metadata write
+                
+                # Write metadata to the file
+                try:
+                    write_metadata(new_path, new_metadata)
+                    print(f"Updated metadata for: {new_filename}")
+                except PermissionError as pe:
+                    print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
+                    print("File may still be locked. Retrying after delay...")
+                    time.sleep(0.5)
+                    write_metadata(new_path, new_metadata)
+                    print(f"Successfully updated metadata for: {new_filename} on retry")
+                except Exception as meta_error:
+                    print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
+                    import traceback
+                    traceback.print_exc()
+                
+                # Update player with new path AFTER metadata is written
+                if old_path_resolved != new_path_resolved:
+                    # self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p))) # This line is from gui.py, not tag_updater.py
+                    pass # No music player integration in tag_updater.py
+                
             except Exception as e:
-                print(e)
+                print(f"Error processing {file}: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 continue
     
     # Print summary table at the end

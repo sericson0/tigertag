@@ -260,7 +260,8 @@ class MusicPlayer(tk.Frame):
     def unload_file(self):
         """Unload the current file to release file handle"""
         try:
-            pygame.mixer.music.stop()
+            if self.is_playing or self.is_paused:
+                pygame.mixer.music.stop()
             pygame.mixer.music.unload()  # Unload the current music
             self.is_playing = False
             self.is_paused = False
@@ -268,7 +269,11 @@ class MusicPlayer(tk.Frame):
             self.position_var.set(0)
             self.play_button.config(text="▶")
             self.stop_update = True
+            # Clear the current file reference
             self.current_file = None
+            # Force garbage collection to release file handles
+            import gc
+            gc.collect()
         except Exception as e:
             print(f"Error unloading file: {str(e)}")
     
@@ -908,11 +913,11 @@ class ToolGUI:
                             old_filename = audio_file.name
                             old_path_resolved = audio_file.resolve()
                             
-                            # Unload file from player before renaming to avoid file lock
+                            # Unload file from player before any file operations
                             self.root.after(0, lambda: self.music_player.unload_file())
-                            # Small delay to ensure file is released
+                            # Wait longer to ensure file is fully released
                             import time
-                            time.sleep(0.1)
+                            time.sleep(0.3)  # Increased delay
                             
                             # First rename the file
                             new_path = tag_updater.update_filename(
@@ -930,13 +935,33 @@ class ToolGUI:
                             if old_path_resolved != new_path_resolved:
                                 filename_changes.append((old_filename, new_filename))
                             
-                            # Update player with new path if file was renamed
+                            # Ensure file is not loaded in player before writing metadata
+                            self.root.after(0, lambda: self.music_player.unload_file())
+                            time.sleep(0.2)  # Additional delay before metadata write
+                            
+                            # Write metadata to the file
+                            try:
+                                tag_updater.write_metadata(new_path, new_metadata)
+                                print(f"Updated metadata for: {new_filename}")
+                            except PermissionError as pe:
+                                print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
+                                print("File may still be locked. Retrying after delay...")
+                                time.sleep(0.5)
+                                tag_updater.write_metadata(new_path, new_metadata)
+                                print(f"Successfully updated metadata for: {new_filename} on retry")
+                            except Exception as meta_error:
+                                print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
+                                import traceback
+                                traceback.print_exc()
+                            
+                            # Update player with new path AFTER metadata is written
                             if old_path_resolved != new_path_resolved:
                                 self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p)))
                             
-                            tag_updater.write_metadata(new_path, new_metadata)
                         except Exception as e:
-                            print(e)
+                            print(f"Error processing {file}: {str(e)}")
+                            import traceback
+                            traceback.print_exc()
                             continue
                 
                 tag_updater.print_filename_changes_table(filename_changes)
