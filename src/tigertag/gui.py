@@ -11,6 +11,8 @@ from pathlib import Path
 import pygame
 import time
 import os
+import config_handler
+import vdj_updater
 
 class ConsoleRedirect:
     """Redirects stdout to the GUI console"""
@@ -666,6 +668,13 @@ class ToolGUI:
         self.waiting_for_input = False
         self.input_result = None
         
+        # Virtual DJ database linking
+        self.link_database = tk.BooleanVar()
+        self.vdj_database_path = tk.StringVar()
+        
+        # Load saved config
+        self.load_vdj_config()
+        
         self.artists = artists
         self.metadata_dict = metadata_dict
         self.current_audio_file = None  # Track current file being processed
@@ -691,7 +700,7 @@ class ToolGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(6, weight=1)  # Changed from 5 to 6
+        main_frame.rowconfigure(7, weight=1)  # Changed to 7 for console
         
         # Folder selection and Filename format on same row
         ttk.Label(main_frame, text="Folder:").grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -739,22 +748,50 @@ class ToolGUI:
         self.artist_selector = ArtistSelectorDropdown(main_frame, self.artists)
         self.artist_selector.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=5)
         
-        # Music player (move to row 4)
-        ttk.Label(main_frame, text="Player:").grid(row=4, column=0, sticky=(tk.W, tk.N), pady=5)
+        # Virtual DJ Database Linking (row 4)
+        vdj_frame = ttk.LabelFrame(main_frame, text="Virtual DJ Database", padding="5")
+        vdj_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        vdj_frame.columnconfigure(1, weight=1)
+        
+        # Link Database toggle
+        link_checkbox = ttk.Checkbutton(
+            vdj_frame,
+            text="Link Database",
+            variable=self.link_database,
+            command=self.on_link_database_toggle
+        )
+        link_checkbox.grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        
+        # Database path frame
+        db_path_frame = ttk.Frame(vdj_frame)
+        db_path_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
+        db_path_frame.columnconfigure(0, weight=1)
+        
+        ttk.Entry(db_path_frame, textvariable=self.vdj_database_path, state='readonly').grid(
+            row=0, column=0, sticky=(tk.W, tk.E), padx=(5, 5)
+        )
+        ttk.Button(
+            db_path_frame,
+            text="Browse",
+            command=self.browse_vdj_database
+        ).grid(row=0, column=1, padx=(0, 5))
+        
+        # Music player (move to row 5)
+        ttk.Label(main_frame, text="Player:").grid(row=5, column=0, sticky=(tk.W, tk.N), pady=5)
         player_frame = ttk.LabelFrame(main_frame, text="Music Player", padding="5")
-        player_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=5)
+        player_frame.grid(row=5, column=1, sticky=(tk.W, tk.E), pady=5)
         player_frame.columnconfigure(0, weight=1)
         
         self.music_player = MusicPlayer(player_frame)
         self.music_player.pack(fill=tk.BOTH, expand=True)
         
-        # Run button (move to row 5)
+        # Run button (move to row 6)
         self.run_button = ttk.Button(main_frame, text="Run Tool", command=self.run_tag_updater)
-        self.run_button.grid(row=5, column=0, columnspan=2, pady=10, sticky=tk.W)
+        self.run_button.grid(row=6, column=0, columnspan=2, pady=10, sticky=tk.W)
         
-        # Console output area (move to row 6)
+        # Console output area (move to row 7)
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
-        console_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        console_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         console_frame.columnconfigure(0, weight=1)
         console_frame.rowconfigure(0, weight=1)
         
@@ -787,7 +824,7 @@ class ToolGUI:
         
         # Input area (hidden by default)
         self.input_frame = ttk.Frame(main_frame)
-        self.input_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)  # Changed from row=6
+        self.input_frame.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)  # Changed to row 8
         self.input_frame.columnconfigure(1, weight=1)
         self.input_frame.grid_remove()  # Hide initially
         
@@ -798,6 +835,27 @@ class ToolGUI:
         
         # Bind Enter key to submit
         self.input_entry.bind('<Return>', lambda e: self.submit_input())
+    
+    def load_vdj_config(self):
+        """Load Virtual DJ database settings from config."""
+        self.link_database.set(config_handler.is_link_database_enabled())
+        vdj_path = config_handler.get_vdj_database_path()
+        if vdj_path:
+            self.vdj_database_path.set(vdj_path)
+    
+    def on_link_database_toggle(self):
+        """Handle link database checkbox toggle."""
+        config_handler.set_link_database(self.link_database.get())
+    
+    def browse_vdj_database(self):
+        """Browse for Virtual DJ database XML file."""
+        file_path = filedialog.askopenfilename(
+            title="Select Virtual DJ Database XML File",
+            filetypes=[("XML files", "*.xml"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.vdj_database_path.set(file_path)
+            config_handler.set_vdj_database_path(file_path)
     
     def update_metadata(self):
         print("Updating Metadata")
@@ -965,6 +1023,28 @@ class ToolGUI:
                             continue
                 
                 tag_updater.print_filename_changes_table(filename_changes)
+                
+                # Update Virtual DJ database if enabled
+                if self.link_database.get() and filename_changes:
+                    vdj_path = self.vdj_database_path.get()
+                    if vdj_path and Path(vdj_path).exists():
+                        print("\n" + "=" * 80)
+                        print("Updating Virtual DJ Database...")
+                        print("=" * 80)
+                        updated_count, error = vdj_updater.update_vdj_database(
+                            vdj_path,
+                            filename_changes,
+                            folder
+                        )
+                        if error:
+                            print(f"Error: {error}")
+                        else:
+                            print(f"Successfully updated {updated_count} entries in Virtual DJ database.")
+                        print("=" * 80 + "\n")
+                    elif vdj_path:
+                        print(f"\nWarning: Virtual DJ database file not found: {vdj_path}")
+                        print("Skipping database update.\n")
+                
                 print("\n\n >>> Finished updating folder! <<< \n\n\n")
             
             # Run the tag updater with player integration
