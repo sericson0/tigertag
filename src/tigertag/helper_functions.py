@@ -11,41 +11,19 @@ def strip_accents(text: str) -> str:
 
 def update_filename(path: Path, title: str, orchestra: str = "", year: str = "", 
                    format_type: str = "orchestra - title - year", 
-                   artist_last_name: str = "", orchestra_last_name: str = "") -> Path:
+                   orchestra_last_name: str = "", singer_last_name: str = "") -> Path:
     """Rename the file to a slugified version based on the selected format, preserving the extension."""
     if not path.is_file():
         raise ValueError(f"Path is not a file: {path}")
 
     # Build tag title based on format
-    if format_type == "orchestra - title - year":
-        if orchestra != "" and year != "":
-            tag_title = f"{orchestra} - {title} - {year}"
-        elif orchestra != "":
-            tag_title = f"{orchestra} - {title}"
-        else:
-            tag_title = title
-    elif format_type == "orchestra last - singer last - title - year":
-        # Use artist_last_name which already contains "orchestra_last_name - singer_last_name"
-        if artist_last_name != "" and year != "":
-            tag_title = f"{artist_last_name} - {title} - {year}"
-        elif artist_last_name != "":
-            tag_title = f"{artist_last_name} - {title}"
-        else:
-            tag_title = title
-    elif format_type == "orchestra last - title - year":
-        if orchestra_last_name != "" and year != "":
-            tag_title = f"{orchestra_last_name} - {title} - {year}"
-        elif orchestra_last_name != "":
-            tag_title = f"{orchestra_last_name} - {title}"
-        else:
-            tag_title = title
-    else:
-        # Default to original behavior
-        tag_title = title
-        if orchestra != "" and year != "":
-            tag_title = f"{orchestra} - {title} - {year}"
-        elif orchestra != "":
-            tag_title = f"{orchestra} - {title}"
+    tag_title = (format_type
+    .replace("orchestra last", orchestra_last_name)
+    .replace("orchestra", orchestra)
+    .replace("singer last", singer_last_name)
+    .replace("title", title)
+    .replace("year", year)
+    )
 
     safe_title = slugify_filename(tag_title)
 
