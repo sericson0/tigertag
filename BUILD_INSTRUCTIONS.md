@@ -65,7 +65,7 @@ tigertag/
 
 If you need to customize the build, edit `tigertag.spec`:
 
-- **Add an icon**: Set `icon='path/to/icon.ico'` in the `EXE()` section
+- **Add an icon**: The spec file automatically looks for `docs/logo.ico` (preferred) or `docs/logo.png`. For Windows, `.ico` format is recommended. You can convert PNG to ICO using online tools or ImageMagick.
 - **Show console window**: Change `console=False` to `console=True` (for debugging)
 - **Include additional files**: Add entries to the `datas` list
 - **Add hidden imports**: Add to the `hiddenimports` list

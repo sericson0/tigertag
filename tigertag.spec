@@ -22,6 +22,18 @@ src_dir = project_root / "src"
 tigertag_dir = src_dir / "tigertag"
 metadata_dir = project_root / "metadata"
 
+# Try to collect rapidfuzz binaries using collect_all if available
+try:
+    from PyInstaller.utils.hooks import collect_all, collect_submodules
+    rapidfuzz_datas, rapidfuzz_binaries, rapidfuzz_hiddenimports = collect_all('rapidfuzz')
+    # Collect all rapidfuzz submodules
+    rapidfuzz_hiddenimports.extend(collect_submodules('rapidfuzz'))
+except ImportError:
+    # Fallback if PyInstaller hooks not available during spec execution
+    rapidfuzz_datas = []
+    rapidfuzz_binaries = []
+    rapidfuzz_hiddenimports = []
+
 # Collect all Python files in tigertag package
 a = Analysis(
     ['launcher.py'],
@@ -30,11 +42,11 @@ a = Analysis(
         str(src_dir),
         str(tigertag_dir),
     ],
-    binaries=[],
+    binaries=rapidfuzz_binaries,
     datas=[
         # Include metadata parquet files
         (str(metadata_dir / "parquet_files"), "metadata/parquet_files"),
-    ] + (
+    ] + rapidfuzz_datas + (
         # Include config file if it exists
         [(str(tigertag_dir / "tigertag_config.json"), "tigertag")] 
         if (tigertag_dir / "tigertag_config.json").exists() 
@@ -64,12 +76,22 @@ a = Analysis(
         'rapidfuzz',
         'rapidfuzz.fuzz',
         'rapidfuzz.process',
+        'rapidfuzz.distance',
+        'rapidfuzz.distance.Levenshtein',
+        'rapidfuzz.distance._initialize',
+        'rapidfuzz.fuzz_py',
+        'rapidfuzz.process_py',
+        'rapidfuzz._utils',
+        'rapidfuzz._common',
+        'rapidfuzz_capi',
+        'rapidfuzz_cpp',
+        'rapidfuzz.str_utils',
         'config_handler',
         'metadata_handler',
         'helper_functions',
         'tag_updater',
         'vdj_updater',
-    ],
+    ] + rapidfuzz_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -104,6 +126,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # You can add an .ico file path here if you have one
+    icon=str(project_root / "docs" / "logo.ico") if (project_root / "docs" / "logo.ico").exists() else (
+        str(project_root / "docs" / "logo.png") if (project_root / "docs" / "logo.png").exists() else None
+    ),  # Prefer .ico for Windows, PNG may work but .ico is recommended
 )
 
