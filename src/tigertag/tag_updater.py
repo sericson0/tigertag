@@ -64,7 +64,7 @@ class MetaData:
         comment = f"Orchestra: {self.orchestra}, Singer: {self.singer}\n"
         comment += f"Date: {self.date}, Grouping: {self.grouping}\n"
         comment += f"Composer: {self.composer}, Author: {self.author}\n"
-        comment += f"Lineup: self.lineup\n"
+        comment += f"Lineup: {self.lineup}\n"
         comment += f"Label: {self.label}, Master: {self.master}\n"
         for val in ["pianist", "bassist", "bandoneons", "strings"]:
             if getattr(self, val) != "":
