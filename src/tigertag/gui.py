@@ -13,6 +13,7 @@ import time
 import os
 import config_handler
 import vdj_updater
+from batch_audio_processor import process_audio_file
 
 class ConsoleRedirect:
     """Redirects stdout to the GUI console"""
@@ -672,6 +673,13 @@ class ToolGUI:
         self.link_database = tk.BooleanVar()
         self.vdj_database_path = tk.StringVar()
         
+        # Audio processing options
+        self.convert_aflac_to_flac = tk.BooleanVar(value=False)
+        self.convert_to_mono = tk.BooleanVar(value=False)
+        self.convert_to_48khz = tk.BooleanVar(value=False)
+        self.use_24bit = tk.BooleanVar(value=False)
+        self.normalize_audio = tk.BooleanVar(value=False)
+        
         # Load saved config
         self.load_vdj_config()
         
@@ -700,7 +708,7 @@ class ToolGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(7, weight=1)  # Changed to 7 for console
+        main_frame.rowconfigure(8, weight=1)  # Changed to 8 for console
         
         # Folder selection and Filename format on same row
         ttk.Label(main_frame, text="Folder:").grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -776,22 +784,57 @@ class ToolGUI:
             command=self.browse_vdj_database
         ).grid(row=0, column=1, padx=(0, 5))
         
-        # Music player (move to row 5)
-        ttk.Label(main_frame, text="Player:").grid(row=5, column=0, sticky=(tk.W, tk.N), pady=5)
+        # Audio Processing Options (row 5)
+        audio_frame = ttk.LabelFrame(main_frame, text="Audio Processing Options", padding="5")
+        audio_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        
+        # Create checkboxes in a grid layout
+        ttk.Checkbutton(
+            audio_frame,
+            text="Convert AFLAC to FLAC",
+            variable=self.convert_aflac_to_flac
+        ).grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Checkbutton(
+            audio_frame,
+            text="Sum to Mono",
+            variable=self.convert_to_mono
+        ).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Checkbutton(
+            audio_frame,
+            text="Convert to 48kHz",
+            variable=self.convert_to_48khz
+        ).grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Checkbutton(
+            audio_frame,
+            text="Use 24-bit Depth",
+            variable=self.use_24bit
+        ).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Checkbutton(
+            audio_frame,
+            text="Normalize Audio",
+            variable=self.normalize_audio
+        ).grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        
+        # Music player (row 6)
+        ttk.Label(main_frame, text="Player:").grid(row=6, column=0, sticky=(tk.W, tk.N), pady=5)
         player_frame = ttk.LabelFrame(main_frame, text="Music Player", padding="5")
-        player_frame.grid(row=5, column=1, sticky=(tk.W, tk.E), pady=5)
+        player_frame.grid(row=6, column=1, sticky=(tk.W, tk.E), pady=5)
         player_frame.columnconfigure(0, weight=1)
         
         self.music_player = MusicPlayer(player_frame)
         self.music_player.pack(fill=tk.BOTH, expand=True)
         
-        # Run button (move to row 6)
+        # Run button (row 7)
         self.run_button = ttk.Button(main_frame, text="Run Tool", command=self.run_tag_updater)
-        self.run_button.grid(row=6, column=0, columnspan=2, pady=10, sticky=tk.W)
+        self.run_button.grid(row=7, column=0, columnspan=2, pady=10, sticky=tk.W)
         
-        # Console output area (move to row 7)
+        # Console output area (row 8)
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
-        console_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        console_frame.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         console_frame.columnconfigure(0, weight=1)
         console_frame.rowconfigure(0, weight=1)
         
@@ -824,7 +867,7 @@ class ToolGUI:
         
         # Input area (hidden by default)
         self.input_frame = ttk.Frame(main_frame)
-        self.input_frame.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)  # Changed to row 8
+        self.input_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)  # Changed to row 9
         self.input_frame.columnconfigure(1, weight=1)
         self.input_frame.grid_remove()  # Hide initially
         
@@ -953,7 +996,7 @@ class ToolGUI:
                 filename_changes = []
                 
                 for file in os.listdir(audio_folder):
-                    if not file.endswith(('.mp3', '.flac', '.m4a', '.mp4', "aif")):
+                    if not file.endswith(('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')):
                         continue
                     
                     audio_file = Path(audio_folder, file)
@@ -992,6 +1035,59 @@ class ToolGUI:
                             
                             if old_path_resolved != new_path_resolved:
                                 filename_changes.append((old_filename, new_filename))
+                            
+                            # Check if any audio processing options are enabled
+                            process_audio = (
+                                self.convert_aflac_to_flac.get() or
+                                self.convert_to_mono.get() or
+                                self.convert_to_48khz.get() or
+                                self.use_24bit.get() or
+                                self.normalize_audio.get()
+                            )
+                            
+                            # Process audio file if any options are enabled
+                            if process_audio:
+                                # Ensure file is not loaded in player before processing
+                                self.root.after(0, lambda: self.music_player.unload_file())
+                                time.sleep(0.3)  # Wait to ensure file is fully released
+                                
+                                print(f"\nProcessing audio file: {new_filename}")
+                                try:
+                                    # Process audio in place (overwrite the file)
+                                    success = process_audio_file(
+                                        input_path=new_path,
+                                        output_path=new_path,
+                                        target_lufs=-13.0,
+                                        convert_to_flac=self.convert_aflac_to_flac.get(),
+                                        convert_to_mono=self.convert_to_mono.get(),
+                                        convert_to_48khz=self.convert_to_48khz.get(),
+                                        use_24bit=self.use_24bit.get(),
+                                        normalize=self.normalize_audio.get()
+                                    )
+                                    if success:
+                                        print(f"✓ Audio processing completed for: {new_filename}\n")
+                                    else:
+                                        print(f"⚠ Audio processing failed for: {new_filename}\n")
+                                except Exception as audio_error:
+                                    print(f"Error processing audio for {new_filename}: {str(audio_error)}")
+                                    import traceback
+                                    traceback.print_exc()
+                                
+                                # Update path if extension changed (e.g., AFLAC to FLAC)
+                                # The batch_audio_processor handles the conversion and file deletion
+                                if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                                    # Check if file with .flac extension exists (processor created it)
+                                    flac_path = new_path.with_suffix('.flac')
+                                    if flac_path.exists():
+                                        new_path = flac_path
+                                        new_filename = new_path.name
+                                        # Update filename changes if needed
+                                        if old_path_resolved != new_path.resolve():
+                                            # Find and update the entry in filename_changes
+                                            for i, (old, new) in enumerate(filename_changes):
+                                                if new.endswith('.aflac'):
+                                                    filename_changes[i] = (old, new_path.name)
+                                                    break
                             
                             # Ensure file is not loaded in player before writing metadata
                             self.root.after(0, lambda: self.music_player.unload_file())
