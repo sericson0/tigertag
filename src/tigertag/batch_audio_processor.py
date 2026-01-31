@@ -1172,7 +1172,7 @@ def process_audio_file(
         input_path: Path to input audio file
         output_path: Path to output audio file
         target_lufs: Target LUFS for normalization (default: -13.0)
-        convert_to_flac: If True, convert AFLAC files to FLAC
+        convert_to_flac: If True, convert lossless files (AFLAC, AIFF) to FLAC
         convert_to_mono: If True, convert stereo to mono
         convert_to_48khz: If True, convert sample rate to 48kHz
         use_24bit: If True, export with 24-bit depth
@@ -1196,16 +1196,17 @@ def process_audio_file(
         if album_art:
             print(f"  - Extracted album art ({len(album_art)} bytes)")
         
-        # Handle AFLAC to FLAC conversion if requested
+        # Handle lossless to FLAC conversion if requested (AFLAC and AIFF)
         file_ext = input_path.suffix.lower()
-        if convert_to_flac and file_ext == '.aflac':
-            # Convert AFLAC to FLAC by renaming extension
-            # Note: This assumes AFLAC is just FLAC with a different extension
-            # If AFLAC is a different format, we'll need to handle it differently
-            print(f"  - Converting AFLAC to FLAC")
+        if convert_to_flac and file_ext in ('.aflac', '.aiff'):
+            # Convert lossless formats to FLAC
+            if file_ext == '.aflac':
+                print(f"  - Converting AFLAC to FLAC")
+            elif file_ext == '.aiff':
+                print(f"  - Converting AIFF to FLAC")
             file_ext = '.flac'
             # Update output path to use .flac extension
-            if output_path.suffix.lower() in ('.aflac', '.flac'):
+            if output_path.suffix.lower() in ('.aflac', '.aiff', '.flac'):
                 output_path = output_path.with_suffix('.flac')
         
         # Check if FFmpeg is required for this file type
@@ -1309,7 +1310,7 @@ def process_audio_file(
         
         # Get original file extension and preserve it (or use FLAC if converted)
         original_ext = input_path.suffix.lower()
-        if convert_to_flac and original_ext == '.aflac':
+        if convert_to_flac and original_ext in ('.aflac', '.aiff'):
             original_ext = '.flac'
         if not original_ext:
             original_ext = '.wav'  # Default to wav if no extension
@@ -1481,20 +1482,23 @@ def process_audio_file(
             else:
                 print(f"  - Warning: Could not preserve album art")
         
-        # If we converted AFLAC to FLAC and the original file still exists, delete it
+        # If we converted lossless to FLAC and the original file still exists, delete it
         # Only delete if processing in place (input and output are the same location)
-        if convert_to_flac and input_path.suffix.lower() == '.aflac':
+        if convert_to_flac and input_path.suffix.lower() in ('.aflac', '.aiff'):
             if input_path.exists() and input_path != output_path:
                 # Only delete if output is in the same directory (in-place processing)
                 if input_path.parent == output_path.parent:
                     try:
                         input_path.unlink()
-                        print(f"  - Removed original AFLAC file")
+                        original_format = "AFLAC" if input_path.suffix.lower() == '.aflac' else "AIFF"
+                        print(f"  - Removed original {original_format} file")
                     except Exception as e:
-                        print(f"  - Warning: Could not remove original AFLAC file: {str(e)}")
+                        original_format = "AFLAC" if input_path.suffix.lower() == '.aflac' else "AIFF"
+                        print(f"  - Warning: Could not remove original {original_format} file: {str(e)}")
                 else:
                     # Output is in a different location, keep original file
-                    print(f"  - Original AFLAC file preserved (output in different folder)")
+                    original_format = "AFLAC" if input_path.suffix.lower() == '.aflac' else "AIFF"
+                    print(f"  - Original {original_format} file preserved (output in different folder)")
         
         print(f"  ✓ Successfully processed: {output_path.name}\n")
         return True

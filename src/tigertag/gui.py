@@ -948,7 +948,7 @@ class ToolGUI:
         
         # Add checkboxes to audio processing dropdown
         self.audio_processing_dropdown.add_checkbox(
-            "Convert AFLAC to FLAC", self.convert_aflac_to_flac, 0, 0
+            "Convert Lossless to FLAC", self.convert_aflac_to_flac, 0, 0
         )
         self.audio_processing_dropdown.add_checkbox(
             "Sum to Mono", self.convert_to_mono, 0, 1
@@ -2054,9 +2054,9 @@ class ToolGUI:
                     import time
                     time.sleep(0.3)
                     
-                    # Handle AFLAC to FLAC conversion in filename
+                    # Handle lossless to FLAC conversion in filename (AFLAC and AIFF)
                     audio_output_path = new_path
-                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff'):
                         audio_output_path = new_path.with_suffix('.flac')
                         # Handle conflicts
                         counter = 1
@@ -2325,9 +2325,9 @@ class ToolGUI:
                         self.root.after(0, lambda: self.music_player.unload_file())
                         time.sleep(0.3)
                         
-                        # Handle AFLAC to FLAC conversion in filename
+                        # Handle lossless to FLAC conversion in filename (AFLAC and AIFF)
                         audio_output_path = new_path
-                        if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                        if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff'):
                             audio_output_path = new_path.with_suffix('.flac')
                             # Handle conflicts
                             counter = 1
