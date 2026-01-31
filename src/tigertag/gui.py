@@ -783,6 +783,9 @@ class ToolGUI:
         # Auto-select option
         self.auto_select = tk.BooleanVar(value=False)
         
+        # Year-match option
+        self.year_match = tk.BooleanVar(value=False)
+        
         # Undo history - stack of operations that can be undone
         self.undo_history = []  # List of dicts with: original_path, new_path, chosen_idx, catalogue, audio_folder
         
@@ -837,8 +840,15 @@ class ToolGUI:
             variable=self.auto_select
         ).grid(row=0, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
         
+        # Year-match checkbox in settings dropdown
+        ttk.Checkbutton(
+            self.settings_dropdown.dropdown_frame,
+            text="Auto-select by year match",
+            variable=self.year_match
+        ).grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        
         # Filename format in settings dropdown
-        ttk.Label(self.settings_dropdown.dropdown_frame, text="Filename Format:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(self.settings_dropdown.dropdown_frame, text="Filename Format:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         format_options = [
             "title - orchestra last - singer last - year",
             "title - orchestra last - year",
@@ -856,14 +866,14 @@ class ToolGUI:
             state="readonly",
             width=50
         )
-        format_dropdown.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
+        format_dropdown.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
         
         # Update metadata button in settings dropdown
         ttk.Button(
             self.settings_dropdown.dropdown_frame,
             text="Update Metadata",
             command=self.update_metadata
-        ).grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=5, pady=5)
+        ).grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=5)
         
         # Virtual DJ Database Linking in settings dropdown
         vdj_checkbox = ttk.Checkbutton(
@@ -872,11 +882,11 @@ class ToolGUI:
             variable=self.link_database,
             command=self.on_link_database_toggle
         )
-        vdj_checkbox.grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        vdj_checkbox.grid(row=4, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
         
         # Database path frame in settings dropdown
         db_path_frame = ttk.Frame(self.settings_dropdown.dropdown_frame)
-        db_path_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
+        db_path_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
         db_path_frame.columnconfigure(0, weight=1)
         
         ttk.Entry(db_path_frame, textvariable=self.vdj_database_path, state='readonly').grid(
@@ -1086,6 +1096,9 @@ class ToolGUI:
         # Load auto-select
         self.auto_select.set(config_handler.get_auto_select())
         
+        # Load year-match
+        self.year_match.set(config_handler.get_year_match())
+        
         # Load selected artists - will be applied after widgets are created
         self._saved_selected_artists = config_handler.get_selected_artists()
     
@@ -1123,6 +1136,9 @@ class ToolGUI:
         
         # Save auto-select
         config_handler.set_auto_select(self.auto_select.get())
+        
+        # Save year-match
+        config_handler.set_year_match(self.year_match.get())
         
         # Save selected artists (if artist_selector exists)
         if hasattr(self, 'artist_selector'):
@@ -1509,7 +1525,8 @@ class ToolGUI:
                 audio_file.name, 
                 audio_metadata, 
                 file_catalogue,
-                auto_select=self.auto_select.get()
+                auto_select=self.auto_select.get(),
+                year_match=self.year_match.get()
             )
             
             if chosen_idx != 9999:
@@ -1857,7 +1874,8 @@ class ToolGUI:
                 original_path.name, 
                 audio_metadata, 
                 file_catalogue,
-                auto_select=self.auto_select.get()
+                auto_select=self.auto_select.get(),
+                year_match=self.year_match.get()
             )
             
             # Restore input

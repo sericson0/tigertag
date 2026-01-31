@@ -23,6 +23,7 @@ def load_config() -> dict:
         "aufs_target": "-13.0",
         "output_structure": "preserve",
         "auto_select": False,
+        "year_match": False,
         "selected_artists": []
     }
     
@@ -163,6 +164,17 @@ def set_auto_select(enabled: bool) -> None:
     """Set the auto-select setting in config."""
     config = load_config()
     config["auto_select"] = enabled
+    save_config(config)
+
+def get_year_match() -> bool:
+    """Get the year-match setting from config."""
+    config = load_config()
+    return config.get("year_match", False)
+
+def set_year_match(enabled: bool) -> None:
+    """Set the year-match setting in config."""
+    config = load_config()
+    config["year_match"] = enabled
     save_config(config)
 
 def get_selected_artists() -> List[str]:

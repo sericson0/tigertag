@@ -414,7 +414,7 @@ def remove_brackets(text: str) -> str:
     return text
 
 
-def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame, auto_select: bool = False) -> int | None:
+def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame, auto_select: bool = False, year_match: bool = False) -> int | None:
     """Interactively ask the user to pick a row; return DataFrame index or None."""
     
     title = audio_metadata["title"]
@@ -451,6 +451,54 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame, auto_se
     if auto_select and len(candidate_indices) == 1:
         print(f"\nFOUND 1 MATCH - Auto-selecting (auto-select enabled)\n")
         return candidate_indices[0]
+    
+    # Year-match: if file has a date/year and exactly one candidate matches that year, auto-select
+    if year_match and len(candidate_indices) > 1:
+        file_date = audio_metadata.get('date', '').strip()
+        if file_date:
+            # Try to extract year from date (format could be YYYY, YYYY-MM-DD, etc.)
+            file_year = None
+            try:
+                # Try to parse as year first
+                if len(file_date) == 4 and file_date.isdigit():
+                    file_year = int(file_date)
+                else:
+                    # Try to extract year from date string (look for 4-digit year)
+                    year_match_pattern = r'\b(19|20)\d{2}\b'
+                    match = re.search(year_match_pattern, file_date)
+                    if match:
+                        file_year = int(match.group())
+            except (ValueError, AttributeError):
+                pass
+            
+            if file_year:
+                # Find candidates that match this year
+                year_matched_indices = []
+                for idx in candidate_indices:
+                    row = catalogue.loc[idx]
+                    candidate_date = str(row.get('Date', ''))
+                    candidate_year = None
+                    try:
+                        # Extract year from candidate date (could be YYYY-MM-DD format)
+                        if candidate_date:
+                            if len(candidate_date) >= 4:
+                                # Try to get first 4 digits
+                                year_str = candidate_date[:4]
+                                if year_str.isdigit():
+                                    candidate_year = int(year_str)
+                    except (ValueError, AttributeError):
+                        pass
+                    
+                    if candidate_year == file_year:
+                        year_matched_indices.append(idx)
+                
+                # If exactly one candidate matches the year, auto-select it
+                if len(year_matched_indices) == 1:
+                    matched_idx = year_matched_indices[0]
+                    row = catalogue.loc[matched_idx]
+                    matched_date = row.get('Date', 'N/A')
+                    print(f"\nFOUND {len(candidate_indices)} MATCHES - Auto-selecting by year match (file year: {file_year}, matched: {matched_date})\n")
+                    return matched_idx
     
     # Display all candidates (always show them, even if only one, to allow custom input)
     if len(candidate_indices) == 1:
