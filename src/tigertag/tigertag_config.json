@@ -16,5 +16,6 @@
     "aufs_target": "-13.0",
     "output_structure": "preserve",
     "auto_select": true,
+    "year_match": true,
     "selected_artists": []
 }
