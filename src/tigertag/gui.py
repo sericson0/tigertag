@@ -1088,7 +1088,8 @@ class ToolGUI:
         ttk.Button(plugin_button_frame, text="Remove Selected", command=self.remove_vst3_plugin).grid(row=0, column=1, padx=2)
         ttk.Button(plugin_button_frame, text="Clear All", command=self.clear_vst3_plugins).grid(row=0, column=2, padx=2)
         ttk.Button(plugin_button_frame, text="Edit Plugin", command=self.edit_vst3_plugin).grid(row=0, column=3, padx=2)
-        ttk.Button(plugin_button_frame, text="Preview", command=self.preview_processed_audio).grid(row=0, column=4, padx=2)
+        ttk.Button(plugin_button_frame, text="Open GUI", command=self.open_vst3_gui).grid(row=0, column=4, padx=2)
+        ttk.Button(plugin_button_frame, text="Preview", command=self.preview_processed_audio).grid(row=0, column=5, padx=2)
         
         # Update listbox if plugins were loaded from config
         if hasattr(self, '_vst3_plugins_loaded') and self._vst3_plugins_loaded:
@@ -1590,6 +1591,138 @@ class ToolGUI:
         ttk.Button(scrollable_frame, text="Close", command=on_close).grid(
             row=row+1, column=0, columnspan=3, pady=10
         )
+    
+    def open_vst3_gui(self):
+        """Open the native VST3 plugin GUI in an external window."""
+        selection = self.vst3_listbox.curselection()
+        if not selection:
+            print("Please select a plugin to open its GUI")
+            return
+        
+        index = selection[0]
+        plugin_path = self.vst3_plugins[index]
+        
+        # Load plugin instance if not already loaded
+        if index >= len(self.vst3_plugin_instances) or self.vst3_plugin_instances[index] is None:
+            plugin_instance = self.load_vst3_plugin_instance(plugin_path)
+            if plugin_instance is None:
+                print(f"Failed to load plugin: {Path(plugin_path).name}")
+                return
+            # Extend list if needed
+            while len(self.vst3_plugin_instances) <= index:
+                self.vst3_plugin_instances.append(None)
+            self.vst3_plugin_instances[index] = plugin_instance
+        else:
+            plugin_instance = self.vst3_plugin_instances[index]
+        
+        try:
+            # Try multiple methods to open the native GUI
+            
+            # Method 1: Check if plugin has GUI-related methods
+            gui_methods = ['show_gui', 'open_editor', 'show_editor', 'open_gui', 'show_plugin_editor']
+            for method_name in gui_methods:
+                if hasattr(plugin_instance, method_name):
+                    method = getattr(plugin_instance, method_name)
+                    if callable(method):
+                        try:
+                            method()
+                            print(f"Opened GUI for {Path(plugin_path).name} using {method_name}")
+                            return
+                        except Exception as e:
+                            continue
+            
+            # Method 2: Try to access through internal attributes (JUCE-based)
+            # Pedalboard uses JUCE, which may expose editor components
+            try:
+                # Check for internal _pedalboard_plugin or similar
+                internal_attrs = ['_pedalboard_plugin', '_plugin', '_processor', '_editor']
+                for attr_name in internal_attrs:
+                    if hasattr(plugin_instance, attr_name):
+                        internal_obj = getattr(plugin_instance, attr_name)
+                        # Try to get editor component
+                        if hasattr(internal_obj, 'get_editor_component'):
+                            editor = internal_obj.get_editor_component()
+                            if editor and (hasattr(editor, 'setVisible') or hasattr(editor, 'show')):
+                                if hasattr(editor, 'setVisible'):
+                                    editor.setVisible(True)
+                                elif hasattr(editor, 'show'):
+                                    editor.show()
+                                print(f"Opened GUI for {Path(plugin_path).name}")
+                                return
+            except Exception as e:
+                pass
+            
+            # Method 3: Windows-specific - Try to find existing plugin window
+            if sys.platform == 'win32':
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+                    
+                    plugin_name = Path(plugin_path).stem
+                    user32 = ctypes.windll.user32
+                    
+                    # Callback to find window by title
+                    found_window = [None]
+                    
+                    def enum_windows_callback(hwnd, lParam):
+                        window_text = ctypes.create_unicode_buffer(512)
+                        user32.GetWindowTextW(hwnd, window_text, 512)
+                        title = window_text.value.lower()
+                        # Check if window title contains plugin name or common VST editor terms
+                        if (plugin_name.lower() in title or 
+                            'vst' in title or 
+                            'editor' in title or 
+                            'plugin' in title):
+                            # Check if it's a visible window
+                            if user32.IsWindowVisible(hwnd):
+                                found_window[0] = hwnd
+                                return False
+                        return True
+                    
+                    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+                    user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
+                    
+                    if found_window[0]:
+                        # Bring window to front
+                        user32.ShowWindow(found_window[0], 9)  # SW_RESTORE
+                        user32.SetForegroundWindow(found_window[0])
+                        print(f"Found and brought to front: {Path(plugin_path).name} GUI window")
+                        return
+                except Exception as e:
+                    pass
+            
+            # Method 4: Try to access GUI through plugin attributes
+            if hasattr(plugin_instance, '__dict__'):
+                for attr_name, attr_value in plugin_instance.__dict__.items():
+                    attr_lower = attr_name.lower()
+                    if any(keyword in attr_lower for keyword in ['gui', 'editor', 'window', 'component', 'view']):
+                        try:
+                            if callable(attr_value):
+                                attr_value()
+                                print(f"Opened GUI for {Path(plugin_path).name}")
+                                return
+                            elif hasattr(attr_value, 'show'):
+                                attr_value.show()
+                                print(f"Opened GUI for {Path(plugin_path).name}")
+                                return
+                            elif hasattr(attr_value, 'setVisible'):
+                                attr_value.setVisible(True)
+                                print(f"Opened GUI for {Path(plugin_path).name}")
+                                return
+                        except:
+                            continue
+            
+            # If all methods fail, inform user
+            print(f"Could not open native GUI for {Path(plugin_path).name}")
+            print("Note: Native GUI support depends on the plugin implementation.")
+            print("Some plugins may not expose their GUI through the Python API.")
+            print("You can use 'Edit Plugin' to adjust parameters through the parameter editor.")
+            
+        except Exception as e:
+            print(f"Error opening plugin GUI: {e}")
+            import traceback
+            traceback.print_exc()
+            print("You can use 'Edit Plugin' to adjust parameters through the parameter editor.")
     
     def preview_processed_audio(self):
         """Preview audio with current plugins and denoising settings applied."""
