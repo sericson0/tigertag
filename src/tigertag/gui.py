@@ -776,6 +776,15 @@ class ToolGUI:
         self.normalize_audio = tk.BooleanVar(value=False)
         self.aufs_target = tk.StringVar(value="-13.0")  # Default AUFS target
         
+        # Denoising options
+        self.enable_denoise = tk.BooleanVar(value=False)
+        self.denoise_strength = tk.StringVar(value="moderate")  # Options: light, moderate, strong
+        self.auto_detect_noise = tk.BooleanVar(value=True)  # Auto-detect noise and prompt user
+        self.noise_threshold = tk.StringVar(value="0.15")  # Threshold for noise detection (0.0-1.0)
+        self.denoise_stationary = tk.BooleanVar(value=True)  # Use stationary noise reduction
+        self.prop_decrease = tk.StringVar(value="0.5")  # Proportion of noise to reduce (0.0-1.0)
+        self.use_noise_sample = tk.BooleanVar(value=True)  # Use noise sample from quiet sections
+        
         # Output folder for processed audio files
         self.output_folder_path = tk.StringVar()
         self.output_structure = tk.StringVar(value="preserve")  # "preserve" or "by_artist"
@@ -830,11 +839,12 @@ class ToolGUI:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(6, weight=1)  # Console row
         
-        # Top row: Settings and Audio Processing dropdowns
+        # Top row: Settings, Audio Processing, and Denoising dropdowns
         top_row_frame = ttk.Frame(main_frame)
         top_row_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         top_row_frame.columnconfigure(0, weight=1)
         top_row_frame.columnconfigure(1, weight=1)
+        top_row_frame.columnconfigure(2, weight=1)
         
         # Settings dropdown (left side)
         self.settings_dropdown = AudioProcessingDropdown(top_row_frame)
@@ -949,6 +959,46 @@ class ToolGUI:
         # AUFS target input in audio processing dropdown
         ttk.Label(self.audio_processing_dropdown.dropdown_frame, text="AUFS Target:").grid(row=2, column=1, sticky=tk.W, padx=(5, 5), pady=2)
         ttk.Entry(self.audio_processing_dropdown.dropdown_frame, textvariable=self.aufs_target, width=10).grid(row=2, column=2, sticky=tk.W, padx=5, pady=2)
+        
+        # Denoising dropdown (separate from audio processing)
+        self.denoising_dropdown = AudioProcessingDropdown(top_row_frame)
+        self.denoising_dropdown.grid(row=0, column=2, sticky=(tk.W, tk.E), padx=(5, 0))
+        self.denoising_dropdown.title_label.config(text="Denoising Options")
+        
+        # Enable denoising checkbox
+        self.denoising_dropdown.add_checkbox(
+            "Enable Denoising", self.enable_denoise, 0, 0
+        )
+        self.denoising_dropdown.add_checkbox(
+            "Auto-detect Noise", self.auto_detect_noise, 0, 1
+        )
+        self.denoising_dropdown.add_checkbox(
+            "Use Noise Sample", self.use_noise_sample, 1, 0
+        )
+        self.denoising_dropdown.add_checkbox(
+            "Stationary Mode", self.denoise_stationary, 1, 1
+        )
+        
+        # Denoising strength dropdown
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="Denoise Strength:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        denoise_strength_combo = ttk.Combobox(
+            self.denoising_dropdown.dropdown_frame,
+            textvariable=self.denoise_strength,
+            values=["light", "moderate", "strong"],
+            state="readonly",
+            width=15
+        )
+        denoise_strength_combo.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=5, pady=2)
+        
+        # Noise detection threshold
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="Noise Threshold:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Entry(self.denoising_dropdown.dropdown_frame, textvariable=self.noise_threshold, width=10).grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="(0.0-1.0, lower=more sensitive)").grid(row=3, column=2, sticky=tk.W, padx=5, pady=2)
+        
+        # Proportion decrease
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="Noise Reduction:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Entry(self.denoising_dropdown.dropdown_frame, textvariable=self.prop_decrease, width=10).grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="(0.0-1.0, higher=more reduction)").grid(row=4, column=2, sticky=tk.W, padx=5, pady=2)
         
         # Folder selection with output folder on same row (row 1)
         ttk.Label(main_frame, text="Input Folder:").grid(row=1, column=0, sticky=tk.W, pady=5)
@@ -1612,7 +1662,18 @@ class ToolGUI:
                             aufs_target_value = -13.0
                             print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
                         
-                        from batch_audio_processor import process_audio_file
+                        # Get denoising parameters
+                        try:
+                            noise_threshold_value = float(self.noise_threshold.get())
+                        except (ValueError, TypeError):
+                            noise_threshold_value = 0.15
+                        
+                        try:
+                            prop_decrease_value = float(self.prop_decrease.get())
+                            prop_decrease_value = max(0.0, min(1.0, prop_decrease_value))  # Clamp to 0-1
+                        except (ValueError, TypeError):
+                            prop_decrease_value = 0.5
+                        
                         success = process_audio_file(
                             input_path=new_path,
                             output_path=audio_output_path,
@@ -1621,7 +1682,15 @@ class ToolGUI:
                             convert_to_mono=self.convert_to_mono.get(),
                             convert_to_48khz=self.convert_to_48khz.get(),
                             use_24bit=self.use_24bit.get(),
-                            normalize=self.normalize_audio.get()
+                            normalize=self.normalize_audio.get(),
+                            denoise=self.enable_denoise.get(),
+                            denoise_strength=self.denoise_strength.get(),
+                            auto_detect_noise=self.auto_detect_noise.get(),
+                            prompt_user=self.custom_input if self.auto_detect_noise.get() else None,
+                            noise_threshold=noise_threshold_value,
+                            denoise_stationary=self.denoise_stationary.get(),
+                            prop_decrease=prop_decrease_value,
+                            use_noise_sample=self.use_noise_sample.get()
                         )
                         if success:
                             print(f"✓ Audio processing completed for: {audio_output_path.name}\n")
@@ -1870,7 +1939,11 @@ class ToolGUI:
                                 convert_to_mono=self.convert_to_mono.get(),
                                 convert_to_48khz=self.convert_to_48khz.get(),
                                 use_24bit=self.use_24bit.get(),
-                                normalize=self.normalize_audio.get()
+                                normalize=self.normalize_audio.get(),
+                                denoise=self.enable_denoise.get(),
+                                denoise_strength=self.denoise_strength.get(),
+                                auto_detect_noise=self.auto_detect_noise.get(),
+                                prompt_user=self.custom_input if self.auto_detect_noise.get() else None
                             )
                             if success:
                                 print(f"✓ Audio processing completed for: {audio_output_path.name}\n")

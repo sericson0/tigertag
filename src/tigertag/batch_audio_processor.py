@@ -684,6 +684,345 @@ def aufs_normalize(audio_segment: AudioSegment, target_lufs: float = -13.0) -> A
     return audio_segment
 
 
+def detect_noise_level(audio_segment: AudioSegment, sample_rate: int = 44100) -> tuple[bool, float]:
+    """
+    Detect if audio has significant noise (hiss, crackle, etc.).
+    
+    Args:
+        audio_segment: AudioSegment to analyze
+        sample_rate: Sample rate for analysis (default: 44100)
+    
+    Returns:
+        Tuple of (has_noise: bool, noise_level: float)
+        noise_level is a value between 0.0 and 1.0 indicating noise severity
+    """
+    try:
+        # Convert to numpy array for analysis
+        samples = np.array(audio_segment.get_array_of_samples())
+        if audio_segment.channels > 1:
+            # Convert to mono for analysis
+            samples = samples.reshape(-1, audio_segment.channels).mean(axis=1)
+        
+        # Normalize to -1.0 to 1.0 range
+        if audio_segment.sample_width == 1:
+            samples = samples.astype(np.float32) / 128.0 - 1.0
+        elif audio_segment.sample_width == 2:
+            samples = samples.astype(np.float32) / 32768.0
+        elif audio_segment.sample_width == 4:
+            samples = samples.astype(np.float32) / 2147483648.0
+        else:
+            samples = samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+        
+        # Calculate RMS (Root Mean Square) for overall level
+        rms = np.sqrt(np.mean(samples ** 2))
+        
+        # Calculate high-frequency content (typical of hiss/noise)
+        # Use FFT to analyze frequency content
+        from scipy import signal
+        f, psd = signal.periodogram(samples, fs=audio_segment.frame_rate, window='hann', nfft=2048)
+        
+        # Focus on high frequencies (above 5kHz) where noise is typically present
+        high_freq_mask = f > 5000
+        high_freq_energy = np.mean(psd[high_freq_mask]) if np.any(high_freq_mask) else 0
+        
+        # Calculate total energy
+        total_energy = np.mean(psd)
+        
+        # Noise indicator: ratio of high-frequency energy to total energy
+        # High ratio suggests noise/hiss
+        noise_ratio = high_freq_energy / (total_energy + 1e-10)
+        
+        # Also check for low-level constant noise (quiet sections with energy)
+        # Analyze quiet sections (below -40 dB)
+        quiet_threshold = 0.01  # -40 dB
+        quiet_samples = samples[np.abs(samples) < quiet_threshold]
+        if len(quiet_samples) > len(samples) * 0.1:  # At least 10% quiet
+            quiet_rms = np.sqrt(np.mean(quiet_samples ** 2))
+            # If quiet sections have significant energy, likely noise
+            quiet_noise_level = quiet_rms / (rms + 1e-10)
+        else:
+            quiet_noise_level = 0
+        
+        # Additional check: spectral flatness (noise tends to have flatter spectrum)
+        # Calculate spectral flatness
+        psd_nonzero = psd[psd > 0]
+        if len(psd_nonzero) > 0:
+            geometric_mean = np.exp(np.mean(np.log(psd_nonzero)))
+            arithmetic_mean = np.mean(psd_nonzero)
+            spectral_flatness = geometric_mean / (arithmetic_mean + 1e-10)
+            # High flatness (close to 1.0) suggests noise
+            flatness_indicator = min(1.0, spectral_flatness * 1.5)
+        else:
+            flatness_indicator = 0
+        
+        # Check for constant background noise (variance in quiet sections)
+        if len(quiet_samples) > len(samples) * 0.05:  # At least 5% quiet
+            quiet_variance = np.var(quiet_samples)
+            # High variance in quiet sections suggests noise
+            variance_indicator = min(1.0, quiet_variance * 100)
+        else:
+            variance_indicator = 0
+        
+        # Enhanced noise detection: check multiple frequency bands
+        # Low-mid frequencies (1-3kHz) for crackle/pops
+        mid_freq_mask = (f > 1000) & (f < 3000)
+        mid_freq_energy = np.mean(psd[mid_freq_mask]) if np.any(mid_freq_mask) else 0
+        
+        # Very high frequencies (8-12kHz) for hiss
+        very_high_freq_mask = (f > 8000) & (f < 12000)
+        very_high_freq_energy = np.mean(psd[very_high_freq_mask]) if np.any(very_high_freq_mask) else 0
+        
+        # Calculate energy ratios
+        mid_ratio = mid_freq_energy / (total_energy + 1e-10)
+        very_high_ratio = very_high_freq_energy / (total_energy + 1e-10)
+        
+        # Combine all indicators with weights
+        noise_level = min(1.0, (
+            noise_ratio * 0.25 +           # High frequency ratio
+            quiet_noise_level * 0.20 +     # Quiet section energy
+            flatness_indicator * 0.15 +     # Spectral flatness
+            variance_indicator * 0.15 +     # Quiet section variance
+            mid_ratio * 0.10 +              # Mid frequency (crackle)
+            very_high_ratio * 0.15          # Very high frequency (hiss)
+        ))
+        
+        # More sensitive threshold - consider it noisy if noise_level > 0.15 (was 0.3)
+        # This will be adjustable via noise_threshold parameter
+        has_noise = noise_level > 0.15  # Default threshold, can be overridden
+        
+        return has_noise, noise_level
+        
+    except Exception as e:
+        print(f"  - Warning: Could not detect noise level: {str(e)}")
+        return False, 0.0
+
+
+def find_noise_sample(audio_segment: AudioSegment, duration_ms: int = 2000) -> Optional[np.ndarray]:
+    """
+    Find a quiet section at the beginning or end of the track to use as noise sample.
+    
+    Args:
+        audio_segment: AudioSegment to analyze
+        duration_ms: Duration of noise sample to extract (default: 2000ms)
+    
+    Returns:
+        numpy array of noise sample, or None if no suitable section found
+    """
+    try:
+        # Convert to numpy array
+        samples = np.array(audio_segment.get_array_of_samples())
+        if audio_segment.channels > 1:
+            samples = samples.reshape(-1, audio_segment.channels).mean(axis=1)
+        
+        # Normalize samples
+        if audio_segment.sample_width == 1:
+            samples = samples.astype(np.float32) / 128.0 - 1.0
+        elif audio_segment.sample_width == 2:
+            samples = samples.astype(np.float32) / 32768.0
+        elif audio_segment.sample_width == 4:
+            samples = samples.astype(np.float32) / 2147483648.0
+        else:
+            samples = samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+        
+        frame_rate = audio_segment.frame_rate
+        sample_duration = int(duration_ms * frame_rate / 1000)
+        
+        # Check beginning (first 5 seconds)
+        check_duration = min(5000, len(audio_segment))
+        check_samples = int(check_duration * frame_rate / 1000)
+        beginning_samples = samples[:check_samples]
+        
+        # Check end (last 5 seconds)
+        end_samples = samples[-check_samples:] if len(samples) > check_samples else samples
+        
+        # Calculate RMS for both sections
+        beginning_rms = np.sqrt(np.mean(beginning_samples ** 2))
+        end_rms = np.sqrt(np.mean(end_samples ** 2))
+        
+        # Threshold for "quiet" section: RMS < 0.05 (-26 dB)
+        quiet_threshold = 0.05
+        
+        # Choose the quieter section
+        if beginning_rms < quiet_threshold and beginning_rms < end_rms:
+            noise_sample = beginning_samples[:sample_duration] if len(beginning_samples) >= sample_duration else beginning_samples
+            print(f"  - Found noise sample at beginning (RMS: {beginning_rms:.4f})")
+            return noise_sample
+        elif end_rms < quiet_threshold:
+            noise_sample = end_samples[-sample_duration:] if len(end_samples) >= sample_duration else end_samples
+            print(f"  - Found noise sample at end (RMS: {end_rms:.4f})")
+            return noise_sample
+        else:
+            print(f"  - No suitable quiet section found (beginning RMS: {beginning_rms:.4f}, end RMS: {end_rms:.4f})")
+            return None
+            
+    except Exception as e:
+        print(f"  - Warning: Could not find noise sample: {str(e)}")
+        return None
+
+
+def apply_denoising(
+    audio_segment: AudioSegment,
+    strength: str = "moderate",
+    noise_sample: Optional[np.ndarray] = None,
+    sample_rate: int = 44100,
+    stationary: bool = True,
+    prop_decrease: float = 0.5
+) -> AudioSegment:
+    """
+    Apply denoising to audio segment using noisereduce library.
+    
+    Args:
+        audio_segment: AudioSegment to denoise
+        strength: Denoising strength - "light", "moderate", or "strong"
+        noise_sample: Optional noise sample array for profile-based denoising
+        sample_rate: Sample rate for processing
+        stationary: Whether to use stationary noise reduction
+        prop_decrease: Proportion of noise to reduce (0.0-1.0)
+    
+    Returns:
+        Denoised AudioSegment
+    """
+    try:
+        import noisereduce as nr
+        
+        # Convert to numpy array
+        samples = np.array(audio_segment.get_array_of_samples())
+        original_channels = audio_segment.channels
+        
+        if original_channels > 1:
+            # Process each channel separately for stereo
+            channels = samples.reshape(-1, original_channels)
+            denoised_channels = []
+            
+            for ch in range(original_channels):
+                channel_samples = channels[:, ch]
+                
+                # Normalize to float32
+                if audio_segment.sample_width == 1:
+                    channel_samples = channel_samples.astype(np.float32) / 128.0 - 1.0
+                elif audio_segment.sample_width == 2:
+                    channel_samples = channel_samples.astype(np.float32) / 32768.0
+                elif audio_segment.sample_width == 4:
+                    channel_samples = channel_samples.astype(np.float32) / 2147483648.0
+                else:
+                    channel_samples = channel_samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+                
+                # Use provided parameters (or map strength if using defaults)
+                if strength == "light" and prop_decrease == 0.5:
+                    actual_prop_decrease = 0.3
+                elif strength == "moderate" and prop_decrease == 0.5:
+                    actual_prop_decrease = 0.5
+                elif strength == "strong" and prop_decrease == 0.5:
+                    actual_prop_decrease = 0.7
+                else:
+                    actual_prop_decrease = prop_decrease
+                
+                actual_stationary = stationary
+                
+                # Apply denoising
+                if noise_sample is not None:
+                    # Use provided noise sample for profile-based denoising
+                    denoised = nr.reduce_noise(
+                        y=channel_samples,
+                        sr=audio_segment.frame_rate,
+                        y_noise=noise_sample,
+                        stationary=actual_stationary,
+                        prop_decrease=actual_prop_decrease
+                    )
+                else:
+                    # Automatic noise reduction
+                    denoised = nr.reduce_noise(
+                        y=channel_samples,
+                        sr=audio_segment.frame_rate,
+                        stationary=actual_stationary,
+                        prop_decrease=actual_prop_decrease
+                    )
+                
+                # Convert back to int16
+                denoised = np.clip(denoised, -1.0, 1.0)
+                if audio_segment.sample_width == 2:
+                    denoised = (denoised * 32768.0).astype(np.int16)
+                elif audio_segment.sample_width == 1:
+                    denoised = ((denoised + 1.0) * 128.0).astype(np.uint8)
+                elif audio_segment.sample_width == 4:
+                    denoised = (denoised * 2147483648.0).astype(np.int32)
+                
+                denoised_channels.append(denoised)
+            
+            # Recombine channels
+            denoised_samples = np.column_stack(denoised_channels).flatten()
+        else:
+            # Mono processing
+            # Normalize to float32
+            if audio_segment.sample_width == 1:
+                samples = samples.astype(np.float32) / 128.0 - 1.0
+            elif audio_segment.sample_width == 2:
+                samples = samples.astype(np.float32) / 32768.0
+            elif audio_segment.sample_width == 4:
+                samples = samples.astype(np.float32) / 2147483648.0
+            else:
+                samples = samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+            
+            # Use provided parameters (or map strength if using defaults)
+            if strength == "light" and prop_decrease == 0.5:
+                actual_prop_decrease = 0.3
+            elif strength == "moderate" and prop_decrease == 0.5:
+                actual_prop_decrease = 0.5
+            elif strength == "strong" and prop_decrease == 0.5:
+                actual_prop_decrease = 0.7
+            else:
+                actual_prop_decrease = prop_decrease
+            
+            actual_stationary = stationary
+            
+            # Apply denoising
+            if noise_sample is not None:
+                denoised = nr.reduce_noise(
+                    y=samples,
+                    sr=audio_segment.frame_rate,
+                    y_noise=noise_sample,
+                    stationary=actual_stationary,
+                    prop_decrease=actual_prop_decrease
+                )
+            else:
+                denoised = nr.reduce_noise(
+                    y=samples,
+                    sr=audio_segment.frame_rate,
+                    stationary=actual_stationary,
+                    prop_decrease=actual_prop_decrease
+                )
+            
+            # Convert back to int
+            denoised = np.clip(denoised, -1.0, 1.0)
+            if audio_segment.sample_width == 2:
+                denoised_samples = (denoised * 32768.0).astype(np.int16)
+            elif audio_segment.sample_width == 1:
+                denoised_samples = ((denoised + 1.0) * 128.0).astype(np.uint8)
+            elif audio_segment.sample_width == 4:
+                denoised_samples = (denoised * 2147483648.0).astype(np.int32)
+            else:
+                denoised_samples = denoised
+        
+        # Create new AudioSegment from denoised samples
+        denoised_audio = AudioSegment(
+            denoised_samples.tobytes(),
+            frame_rate=audio_segment.frame_rate,
+            sample_width=audio_segment.sample_width,
+            channels=original_channels
+        )
+        
+        return denoised_audio
+        
+    except ImportError:
+        print("  - Error: noisereduce library not installed. Install with: pip install noisereduce")
+        return audio_segment
+    except Exception as e:
+        print(f"  - Error applying denoising: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return audio_segment
+
+
 def process_audio_file(
     input_path: Path, 
     output_path: Path, 
@@ -692,7 +1031,11 @@ def process_audio_file(
     convert_to_mono: bool = False,
     convert_to_48khz: bool = False,
     use_24bit: bool = False,
-    normalize: bool = False
+    normalize: bool = False,
+    denoise: bool = False,
+    denoise_strength: str = "moderate",
+    auto_detect_noise: bool = True,
+    prompt_user: Optional[callable] = None
 ) -> bool:
     """
     Process a single audio file with optional transformations.
@@ -775,12 +1118,60 @@ def process_audio_file(
             audio = audio.set_frame_rate(48000)
             print(f"  - Converted sample rate to 48kHz")
         
-        # 3. Normalize using AUFS (if requested)
+        # 3. Denoise (if requested) - do this before normalization to avoid amplifying noise
+        if denoise:
+            should_denoise = True
+            
+            # Auto-detect noise and prompt user if enabled
+            if auto_detect_noise and prompt_user:
+                has_noise, noise_level = detect_noise_level(audio)
+                # Use custom threshold if provided
+                has_noise = noise_level > noise_threshold
+                
+                if has_noise:
+                    print(f"  - Detected noise level: {noise_level:.2%} (threshold: {noise_threshold:.2%})")
+                    # Prompt user
+                    response = prompt_user(
+                        f"Detected noise in {input_path.name} (level: {noise_level:.1%}). Apply denoising? (y/n): "
+                    )
+                    should_denoise = response and response.lower().strip() in ('y', 'yes', '1', '')
+                else:
+                    print(f"  - No significant noise detected (level: {noise_level:.2%}, threshold: {noise_threshold:.2%})")
+                    should_denoise = False
+            
+            if should_denoise:
+                # Try to find noise sample from quiet sections
+                noise_sample = None
+                if use_noise_sample and auto_detect_noise:
+                    noise_sample = find_noise_sample(audio)
+                
+                # Map strength to parameters if not explicitly set
+                if denoise_strength == "light":
+                    actual_stationary = denoise_stationary
+                    actual_prop_decrease = 0.3 if prop_decrease == 0.5 else prop_decrease
+                elif denoise_strength == "moderate":
+                    actual_stationary = denoise_stationary
+                    actual_prop_decrease = prop_decrease
+                else:  # strong
+                    actual_stationary = False  # Strong mode uses non-stationary
+                    actual_prop_decrease = 0.7 if prop_decrease == 0.5 else prop_decrease
+                
+                # Apply denoising with custom parameters
+                audio = apply_denoising(
+                    audio, 
+                    strength=denoise_strength, 
+                    noise_sample=noise_sample,
+                    stationary=actual_stationary,
+                    prop_decrease=actual_prop_decrease
+                )
+                print(f"  - Applied denoising (strength: {denoise_strength}, reduction: {actual_prop_decrease:.1%}, stationary: {actual_stationary})")
+        
+        # 4. Normalize using AUFS (if requested)
         if normalize:
             audio = aufs_normalize(audio, target_lufs)
             print(f"  - Applied AUFS normalization (target: {target_lufs} LUFS)")
         
-        # 4. Export with 24-bit depth
+        # 5. Export with 24-bit depth
         # Preserve the original file extension
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
