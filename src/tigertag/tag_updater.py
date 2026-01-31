@@ -27,10 +27,11 @@ EASYID3_CANONICAL = set(EasyID3.valid_keys.keys())
 
 @dataclass
 class MetaData:
-    title     : str
-    orchestra : str
-    genre     : str
-    year      : str
+    title     : str = ""
+    bandleader: str = ""  # Changed from orchestra to bandleader
+    orchestra : str = ""  # Keep orchestra as separate field for comments
+    genre     : str = ""
+    year      : str = ""
     label     : str = ""
     date      : str = ""
     master    : str = ""
@@ -45,40 +46,69 @@ class MetaData:
     lineup    : str = None
     comment   : str = None
     artist    : str = None
-    orchestra_last_name : str = None
+    leader_last_name : str = None  # Changed from orchestra_last_name
     singer_last_name : str = None
+    artist_format : str = "leader - singer"  # Format for artist tag
     
     def __post_init__(self):
-        self.artist = f"{self.orchestra} - {self.singer}"
-        self.orchestra_last_name = self._get_last_name(self.orchestra)
+        self.leader_last_name = self._get_last_name(self.bandleader)
         self.singer_last_name = self._get_last_name(self.singer)
+        singer_last_names = self._parse_singer_last_names(self.singer)
+        
+        # Build artist tag based on format
+        if self.artist_format == "leader":
+            self.artist = self.bandleader
+        elif self.artist_format == "leader_last":
+            self.artist = self.leader_last_name
+        elif self.artist_format == "leader - singer":
+            self.artist = f"{self.bandleader} - {self.singer}"
+        elif self.artist_format == "leader_last - singer_last":
+            if singer_last_names:
+                self.artist = f"{self.leader_last_name} - {singer_last_names}"
+            else:
+                self.artist = self.leader_last_name
+        else:
+            # Default fallback
+            self.artist = f"{self.bandleader} - {self.singer}"
+        
         self.lineup = self._get_lineup()
         comment = ""
-        for val in ["orchestra", "singer", "date", "label", "grouping", "master", "composer", "author", "pianist",
+        for val in ["bandleader", "orchestra", "singer", "date", "label", "grouping", "master", "composer", "author", "pianist",
                   "bassist", "bandoneons", "strings"]:
             if getattr(self, val) != "":
                 comment += f"{val.capitalize()}: {getattr(self, val)}\n"
         self.comment = self._build_comment()
 
     def _build_comment(self):
-        comment = f"Orchestra: {self.orchestra}, Singer: {self.singer}\n"
+        comment = f"Bandleader: {self.bandleader}, Singer: {self.singer}\n"
+        # Add orchestra if it exists
+        if self.orchestra and str(self.orchestra).strip():
+            comment += f"Orchestra: {self.orchestra}\n"
         comment += f"Date: {self.date}, Grouping: {self.grouping}\n"
         comment += f"Composer: {self.composer}, Author: {self.author}\n"
         comment += f"Lineup: {self.lineup}\n"
         comment += f"Label: {self.label}, Master: {self.master}\n"
         for val in ["pianist", "bassist", "bandoneons", "strings"]:
-            if getattr(self, val) != "":
-                comment += f"{val.capitalize()}: {getattr(self, val)}\n"
+            field_value = getattr(self, val, "")
+            # Robust check: handle None, NaN, empty string, and whitespace-only strings
+            # Convert to string and check if it's meaningful
+            if field_value is not None:
+                str_value = str(field_value).strip()
+                # Check if it's not empty and not NaN
+                if str_value and not (isinstance(field_value, float) and pd.isna(field_value)):
+                    comment += f"{val.capitalize()}: {str_value}\n"
         return comment
     def _get_lineup(self):
         lineup = ""
-        if self.bandoneons != "":
-            lineup += self._count_instruments(musicians = self.bandoneons, default = "Bandoneon")
-        if self.strings != "":
-            lineup += self._count_instruments(musicians = self.strings, default = "Violin")
-        if self.pianist != "": 
+        # Check if bandoneons is not empty and is a string (handle NaN/None)
+        if self.bandoneons and str(self.bandoneons).strip() != "" and not (isinstance(self.bandoneons, float) and pd.isna(self.bandoneons)):
+            lineup += self._count_instruments(musicians = str(self.bandoneons), default = "Bandoneon")
+        # Check if strings is not empty and is a string (handle NaN/None)
+        if self.strings and str(self.strings).strip() != "" and not (isinstance(self.strings, float) and pd.isna(self.strings)):
+            lineup += self._count_instruments(musicians = str(self.strings), default = "Violin")
+        if self.pianist and str(self.pianist).strip() != "" and not (isinstance(self.pianist, float) and pd.isna(self.pianist)): 
             lineup += f"Piano, "
-        if self.bassist != "":
+        if self.bassist and str(self.bassist).strip() != "" and not (isinstance(self.bassist, float) and pd.isna(self.bassist)):
             lineup += f"Bass"
         return lineup
 
@@ -86,7 +116,24 @@ class MetaData:
         other_instruments = {}
         default_count = 0
         lineup = ""
+        # Handle case where musicians might be NaN, None, or not a string
+        if musicians is None or (isinstance(musicians, float) and pd.isna(musicians)):
+            return ""
+        # Convert to string if it's not already
+        musicians = str(musicians).strip()
+        if not musicians:
+            return ""
+        
+        # Normalize default instrument name for comparison (handle plural forms)
+        default_normalized = default.lower().rstrip('s')  # Remove trailing 's' for comparison
+        
+        # Split by comma and process each player
         for player in musicians.split(","):
+            # Strip whitespace from each player entry
+            player = player.strip()
+            # Skip empty entries (from double commas or trailing commas)
+            if not player:
+                continue
             # Check if player has instrument in parentheses
             if "(" in player and ")" in player:
                 # Extract instrument name from parentheses
@@ -94,17 +141,37 @@ class MetaData:
                 end = player.rfind(")")
                 if start < end:
                     instrument = player[start+1:end].strip()
-                    instrument = instrument.capitalize()
-                    other_instruments[instrument] = other_instruments.get(instrument, 0) + 1
+                    # Normalize instrument name (remove plural 's' for comparison)
+                    instrument_normalized = instrument.lower().rstrip('s')
+                    # If the instrument matches the default (case-insensitive, ignoring plural), count as default
+                    if instrument_normalized == default_normalized:
+                        default_count += 1
+                    else:
+                        # Capitalize properly for display
+                        instrument = instrument.capitalize()
+                        other_instruments[instrument] = other_instruments.get(instrument, 0) + 1
             else:
+                # Count as default instrument (e.g., Bandoneon or Violin)
                 default_count += 1
+        
+        # Format default instrument count
         if default_count == 1:
             lineup += f"{default}, "
         elif default_count > 1:
-            lineup += f"{default_count} {default}s, "
+            # Handle pluralization - "Bandoneon" plural is "Bandoneons"
+            if default.lower() == "bandoneon":
+                lineup += f"{default_count} Bandoneons, "
+            else:
+                lineup += f"{default_count} {default}s, "
+        
+        # Format other instruments
         for instrument, count in other_instruments.items():
             if count > 1:
-                lineup += f"{count} {instrument}s, "
+                # Handle pluralization for bandoneon
+                if instrument.lower() == "bandoneon":
+                    lineup += f"{count} Bandoneons, "
+                else:
+                    lineup += f"{count} {instrument}s, "
             else:
                 lineup += f"{instrument}, "
         return lineup
@@ -122,26 +189,58 @@ class MetaData:
                 return f"{second_to_last} {last_name}"
         
         return last_name
+    
+    def _parse_singer_last_names(self, singer: str) -> str:
+        """Parse multiple singers and return their last names joined with ' - '.
+        Handles separators: comma, ' and ', ' y '"""
+        if not singer or not str(singer).strip():
+            return ""
+        
+        # Split by common separators
+        import re
+        # Split by comma, ' and ', or ' y ' (case insensitive)
+        singers = re.split(r',\s*|\s+and\s+|\s+y\s+', str(singer), flags=re.IGNORECASE)
+        
+        last_names = []
+        for s in singers:
+            s = s.strip()
+            if s:
+                last_name = self._get_last_name(s)
+                if last_name:
+                    last_names.append(last_name)
+        
+        return " - ".join(last_names) if last_names else ""
 
 
-def get_updated_metadata(dct: dict):
+def get_updated_metadata(dct: dict, artist_format: str = "leader - singer"):
     dct = {k.lower(): v for k, v in dct.items()}
+    
+    # Helper function to convert NaN/None to empty string
+    def clean_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, float) and pd.isna(value):
+            return ""
+        return str(value) if value else ""
+    
     new_metadata = MetaData(
-        title      = dct.get("title", ""),
-        orchestra  = dct.get("orchestra", ""),
-        genre      = dct.get("genre",""),
-        year       = dct.get("year", ""),
-        date       = dct.get("date", ""),
-        label      = dct.get("label", ""),
-        grouping   = dct.get("grouping", ""),
-        master     = dct.get("master", ""),
-        composer   = dct.get("composer", ""),
-        author     = dct.get("author", ""),
-        singer     = dct.get("singer", ""),
-        pianist    = dct.get("pianist", ""),
-        bassist    = dct.get("bassist", ""),
-        bandoneons = dct.get("bandoneons", ""),
-        strings    = dct.get("strings", ""),
+        title      = clean_value(dct.get("title", "")),
+        bandleader = clean_value(dct.get("bandleader", "")),  # Changed from orchestra
+        orchestra  = clean_value(dct.get("orchestra", "")),  # Keep orchestra as separate field
+        genre      = clean_value(dct.get("genre", "")),
+        year       = clean_value(dct.get("year", "")),
+        date       = clean_value(dct.get("date", "")),
+        label      = clean_value(dct.get("label", "")),
+        grouping   = clean_value(dct.get("grouping", "")),
+        master     = clean_value(dct.get("master", "")),
+        composer   = clean_value(dct.get("composer", "")),
+        author     = clean_value(dct.get("author", "")),
+        singer     = clean_value(dct.get("singer", "")),
+        pianist    = clean_value(dct.get("pianist", "")),
+        bassist    = clean_value(dct.get("bassist", "")),
+        bandoneons = clean_value(dct.get("bandoneons", "")),
+        strings    = clean_value(dct.get("strings", "")),
+        artist_format = artist_format,
     )
     return new_metadata
 
@@ -269,7 +368,13 @@ def save_mp3_metadata(path: Path, new_meta: MetaData) -> None:
         audio.add(TIT1(encoding=3, text=new_meta.grouping))     # Grouping/Content Group
         audio.add(TPUB(encoding=3, text=new_meta.label))
         # Comment (requires special structure)
-        audio.add(COMM(encoding=3, lang='eng', desc='', text=new_meta.comment))
+        # Ensure comment is not None and is a string
+        comment_text = new_meta.comment if new_meta.comment else ""
+        if comment_text:
+            audio.add(COMM(encoding=3, lang='eng', desc='', text=str(comment_text)))
+        else:
+            # Debug: print if comment is empty
+            print(f"  - Warning: Comment is empty for {path.name}")
         
         try:
             audio.save(path, v2_version=3)
@@ -289,7 +394,10 @@ def save_m4a_metadata(path: Path, new_meta: MetaData) -> None:
     audio["©gen"] = [new_meta.genre]
     audio["©grp"] = [new_meta.grouping]
     audio["©day"] = [new_meta.year]
-    audio["©cmt"] = new_meta.comment
+    # Ensure comment is not None and is a string
+    comment_text = new_meta.comment if new_meta.comment else ""
+    if comment_text:
+        audio["©cmt"] = str(comment_text)
     audio["©wrt"] = [new_meta.composer]
     # audio["©pub"] = [new_meta.label]
     set_mp4_freeform(audio, "REMIXER", new_meta.pianist)
@@ -313,12 +421,15 @@ def save_aiff_metadata(path: Path, new_meta) -> None:
     audio.tags['TIT1'] = TIT1(encoding=3, text=new_meta.grouping)
     
     # Comment with proper structure
-    audio.tags['COMM::eng'] = COMM(
-        encoding=3,
-        lang='eng',
-        desc='',
-        text=new_meta.comment
-    )
+    # Ensure comment is not None and is a string
+    comment_text = new_meta.comment if new_meta.comment else ""
+    if comment_text:
+        audio.tags['COMM::eng'] = COMM(
+            encoding=3,
+            lang='eng',
+            desc='',
+            text=str(comment_text)
+        )
     
     audio.save()
 
@@ -337,7 +448,10 @@ def save_flac_metadata(path: Path, new_meta: MetaData) -> None:
     audio["artist"] = new_meta.artist
     audio["genre"] = new_meta.genre
     audio["date"] = new_meta.year
-    audio["comment"] = new_meta.comment
+    # Ensure comment is not None and is a string
+    comment_text = new_meta.comment if new_meta.comment else ""
+    if comment_text:
+        audio["comment"] = str(comment_text)
     audio["composer"] = [new_meta.composer]
     audio["grouping"] = new_meta.grouping
     # Set remixer to original label/publisher value
@@ -389,7 +503,7 @@ def remove_brackets(text: str) -> str:
     return text
 
 
-def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int | None:
+def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame, auto_select: bool = False, year_match: bool = False) -> int | None:
     """Interactively ask the user to pick a row; return DataFrame index or None."""
     
     title = audio_metadata["title"]
@@ -417,23 +531,74 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
     print("\n" + "=" * 80)
     print(f"MATCHING FILE: {file}")
     print(f"  Title: {audio_metadata.get('title', 'N/A')}")
+    print(f"  Artist: {audio_metadata.get('artist', 'N/A')}")
     print(f"  Date:  {audio_metadata.get('date', 'N/A')}")
     print(f"  Album: {audio_metadata.get('album', 'N/A')}")
     print("=" * 80)
     
-    # If only one candidate, use it automatically
-    if len(candidate_indices) == 1:
-        # print("\n>>> Only one candidate found - using it automatically <<<")
-        # print("_"*80, "\n"*5)
+    # Auto-select if only one candidate and auto_select is enabled
+    if auto_select and len(candidate_indices) == 1:
+        print(f"\nFOUND 1 MATCH - Auto-selecting (auto-select enabled)\n")
         return candidate_indices[0]
     
-    # Display all candidates
-    # print(f"\nFOUND {len(candidate_indices)} POSSIBLE MATCHES:\n")
+    # Year-match: if file has a date/year and exactly one candidate matches that year, auto-select
+    if year_match and len(candidate_indices) > 1:
+        file_date = audio_metadata.get('date', '').strip()
+        if file_date:
+            # Try to extract year from date (format could be YYYY, YYYY-MM-DD, etc.)
+            file_year = None
+            try:
+                # Try to parse as year first
+                if len(file_date) == 4 and file_date.isdigit():
+                    file_year = int(file_date)
+                else:
+                    # Try to extract year from date string (look for 4-digit year)
+                    year_match_pattern = r'\b(19|20)\d{2}\b'
+                    match = re.search(year_match_pattern, file_date)
+                    if match:
+                        file_year = int(match.group())
+            except (ValueError, AttributeError):
+                pass
+            
+            if file_year:
+                # Find candidates that match this year
+                year_matched_indices = []
+                for idx in candidate_indices:
+                    row = catalogue.loc[idx]
+                    candidate_date = str(row.get('Date', ''))
+                    candidate_year = None
+                    try:
+                        # Extract year from candidate date (could be YYYY-MM-DD format)
+                        if candidate_date:
+                            if len(candidate_date) >= 4:
+                                # Try to get first 4 digits
+                                year_str = candidate_date[:4]
+                                if year_str.isdigit():
+                                    candidate_year = int(year_str)
+                    except (ValueError, AttributeError):
+                        pass
+                    
+                    if candidate_year == file_year:
+                        year_matched_indices.append(idx)
+                
+                # If exactly one candidate matches the year, auto-select it
+                if len(year_matched_indices) == 1:
+                    matched_idx = year_matched_indices[0]
+                    row = catalogue.loc[matched_idx]
+                    matched_date = row.get('Date', 'N/A')
+                    print(f"\nFOUND {len(candidate_indices)} MATCHES - Auto-selecting by year match (file year: {file_year}, matched: {matched_date})\n")
+                    return matched_idx
+    
+    # Display all candidates (always show them, even if only one, to allow custom input)
+    if len(candidate_indices) == 1:
+        print(f"\nFOUND 1 MATCH:\n")
+    else:
+        print(f"\nFOUND {len(candidate_indices)} POSSIBLE MATCHES:\n")
     
     for n, idx in enumerate(candidate_indices, 1):
         row = catalogue.loc[idx]
         title = row.get('Title', 'N/A')
-        artist = row.get('Orchestra', 'N/A')
+        artist = row.get('Bandleader', row.get('Orchestra', 'N/A'))  # Try Bandleader first, fallback to Orchestra
         singer = row.get('Singer', 'N/A')
         date = row.get('Date', 'N/A')
         
@@ -448,8 +613,86 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
     
     # Get user choice
     while True:
-        choice = input("\nPick a number (or 0 to skip):\n\n\n")
+        choice = input("\nPick a number (or 0 to skip, or 't' to type custom title):\n\n\n")
         
+        # Handle custom title input
+        if choice.lower() == 't' or choice.lower() == 'type':
+            print("_" * 80, "\n")
+            input_title = input(f"Type custom title to search for:\n\n\n")
+            if input_title.strip():
+                # Search for the custom title
+                custom_candidates = find_candidate_rows(input_title, catalogue, threshold=30)
+                if custom_candidates:
+                    # Display custom candidates
+                    print("\n" + "=" * 80)
+                    print(f"CUSTOM SEARCH RESULTS FOR: {input_title}")
+                    print("=" * 80)
+                    for n, idx in enumerate(custom_candidates, 1):
+                        row = catalogue.loc[idx]
+                        title = row.get('Title', 'N/A')
+                        artist = row.get('Bandleader', row.get('Orchestra', 'N/A'))  # Try Bandleader first, fallback to Orchestra
+                        singer = row.get('Singer', 'N/A')
+                        date = row.get('Date', 'N/A')
+                        print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")
+                        if n < len(custom_candidates):
+                            print("      " + "-" * 70)
+                    print("_" * 80)
+                    
+                    # Get choice from custom candidates
+                    while True:
+                        custom_choice = input("\nPick a number from custom results (or 0 to go back):\n\n\n")
+                        if custom_choice.isdigit():
+                            i = int(custom_choice)
+                            if i == 0:
+                                # Go back to original candidates
+                                break
+                            if 1 <= i <= len(custom_candidates):
+                                print(f">>> Selected custom option {i} <<<\n")
+                                return custom_candidates[i - 1]
+                        print("Invalid choice. Please try again.")
+                    # Continue to show original candidates again
+                    print("\n" + "=" * 80)
+                    print(f"MATCHING FILE: {file}")
+                    print(f"  Title: {audio_metadata.get('title', 'N/A')}")
+                    print(f"  Artist: {audio_metadata.get('artist', 'N/A')}")
+                    print(f"  Date:  {audio_metadata.get('date', 'N/A')}")
+                    print(f"  Album: {audio_metadata.get('album', 'N/A')}")
+                    print("=" * 80)
+                    for n, idx in enumerate(candidate_indices, 1):
+                        row = catalogue.loc[idx]
+                        title = row.get('Title', 'N/A')
+                        artist = row.get('Bandleader', row.get('Orchestra', 'N/A'))  # Try Bandleader first, fallback to Orchestra
+                        singer = row.get('Singer', 'N/A')
+                        date = row.get('Date', 'N/A')
+                        print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")
+                        if n < len(candidate_indices):
+                            print("      " + "-" * 70)
+                    print("_" * 80)
+                    continue
+                else:
+                    print(f"No candidates found for '{input_title}'. Returning to original matches...")
+                    print("_" * 80)
+                    # Show original candidates again
+                    print("\n" + "=" * 80)
+                    print(f"MATCHING FILE: {file}")
+                    print(f"  Title: {audio_metadata.get('title', 'N/A')}")
+                    print(f"  Artist: {audio_metadata.get('artist', 'N/A')}")
+                    print(f"  Date:  {audio_metadata.get('date', 'N/A')}")
+                    print(f"  Album: {audio_metadata.get('album', 'N/A')}")
+                    print("=" * 80)
+                    for n, idx in enumerate(candidate_indices, 1):
+                        row = catalogue.loc[idx]
+                        title = row.get('Title', 'N/A')
+                        artist = row.get('Bandleader', row.get('Orchestra', 'N/A'))  # Try Bandleader first, fallback to Orchestra
+                        singer = row.get('Singer', 'N/A')
+                        date = row.get('Date', 'N/A')
+                        print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")
+                        if n < len(candidate_indices):
+                            print("      " + "-" * 70)
+                    print("_" * 80)
+                    continue
+        
+        # Handle numeric choices
         if choice.isdigit():
             i = int(choice)
             if i == 0:
@@ -513,7 +756,7 @@ def update_tags(audio_folder, catalogue):
 
         chosen_idx = ask_choice(file, audio_metadata, catalogue)
         if chosen_idx != 9999:
-            new_metadata = get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
+            new_metadata = get_updated_metadata(catalogue.loc[chosen_idx].to_dict(), artist_format="leader - singer")
             try:
                 old_filename = audio_file.name
                 old_path_resolved = audio_file.resolve()

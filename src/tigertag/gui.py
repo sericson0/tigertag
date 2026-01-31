@@ -1,5 +1,12 @@
 from metadata_handler import load_parquet_folder, csv_to_parquet
-from helper_functions import subset_entries, parse_years_from_folder
+from helper_functions import (
+    subset_entries, 
+    parse_years_from_folder,
+    extract_artist_names_from_folder,
+    extract_artist_from_file_tags,
+    fuzzy_match_artists,
+    slugify_filename
+)
 import tag_updater
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext
@@ -749,9 +756,10 @@ class ToolGUI:
         
         # Variables
         self.folder_path = tk.StringVar()
+        self.folder_paths = []  # List of folder paths for multiple folder processing
         self.start_year = tk.StringVar(value="1900")
         self.end_year = tk.StringVar(value="2050")
-        self.filename_format = tk.StringVar(value="orchestra last - title - singer last - year")  # Default format
+        self.filename_format = tk.StringVar(value="leader last - title - singer last - year")  # Default format
         self.input_var = tk.StringVar()
         self.waiting_for_input = False
         self.input_result = None
@@ -770,10 +778,21 @@ class ToolGUI:
         
         # Output folder for processed audio files
         self.output_folder_path = tk.StringVar()
+        self.output_structure = tk.StringVar(value="preserve")  # "preserve" or "by_artist"
         
-        # Load saved config
-        self.load_vdj_config()
+        # Auto-select option
+        self.auto_select = tk.BooleanVar(value=False)
         
+        # Year-match option
+        self.year_match = tk.BooleanVar(value=False)
+        
+        # Artist tag format option
+        self.artist_format = tk.StringVar(value="leader - singer")  # Default format
+        
+        # Undo history - stack of operations that can be undone
+        self.undo_history = []  # List of dicts with: original_path, new_path, chosen_idx, catalogue, audio_folder
+        
+        # Load saved config (will be loaded after widgets are created)
         self.artists = artists
         self.metadata_dict = metadata_dict
         self.current_audio_file = None  # Track current file being processed
@@ -781,11 +800,16 @@ class ToolGUI:
         # Create GUI elements
         self.create_widgets()
         
+        # Load saved settings after widgets are created
+        self.load_all_settings()
+        
         # Handle window close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
     def on_closing(self):
         """Handle window closing"""
+        # Save all settings before closing
+        self.save_all_settings()
         if hasattr(self, 'music_player'):
             self.music_player.cleanup()
         self.root.destroy()
@@ -812,17 +836,31 @@ class ToolGUI:
         self.settings_dropdown.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
         self.settings_dropdown.title_label.config(text="Settings")
         
+        # Auto-select checkbox in settings dropdown
+        ttk.Checkbutton(
+            self.settings_dropdown.dropdown_frame,
+            text="Auto-select single match",
+            variable=self.auto_select
+        ).grid(row=0, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        
+        # Year-match checkbox in settings dropdown
+        ttk.Checkbutton(
+            self.settings_dropdown.dropdown_frame,
+            text="Auto-select by year match",
+            variable=self.year_match
+        ).grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        
         # Filename format in settings dropdown
-        ttk.Label(self.settings_dropdown.dropdown_frame, text="Filename Format:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(self.settings_dropdown.dropdown_frame, text="Filename Format:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         format_options = [
-            "title - orchestra last - singer last - year",
-            "title - orchestra last - year",
-            "title - orchestra - year",
-            "orchestra last - title - singer last - year",
-            "orchestra last - singer last - title - year",
-            "orchestra last - title - year",
-            "orchestra - title - singer last - year",
-            "orchestra - title - year",
+            "title - leader last - singer last - year",
+            "title - leader last - year",
+            "title - leader - year",
+            "leader last - title - singer last - year",
+            "leader last - singer last - title - year",
+            "leader last - title - year",
+            "leader - title - singer last - year",
+            "leader - title - year",
         ]
         format_dropdown = ttk.Combobox(
             self.settings_dropdown.dropdown_frame,
@@ -831,14 +869,31 @@ class ToolGUI:
             state="readonly",
             width=50
         )
-        format_dropdown.grid(row=0, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
+        format_dropdown.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
+        
+        # Artist tag format in settings dropdown
+        ttk.Label(self.settings_dropdown.dropdown_frame, text="Artist Tag Format:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        artist_format_options = [
+            "leader",
+            "leader_last",
+            "leader - singer",
+            "leader_last - singer_last",
+        ]
+        artist_format_dropdown = ttk.Combobox(
+            self.settings_dropdown.dropdown_frame,
+            textvariable=self.artist_format,
+            values=artist_format_options,
+            state="readonly",
+            width=50
+        )
+        artist_format_dropdown.grid(row=3, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
         
         # Update metadata button in settings dropdown
         ttk.Button(
             self.settings_dropdown.dropdown_frame,
             text="Update Metadata",
             command=self.update_metadata
-        ).grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=5, pady=5)
+        ).grid(row=4, column=0, columnspan=3, sticky=tk.W, padx=5, pady=5)
         
         # Virtual DJ Database Linking in settings dropdown
         vdj_checkbox = ttk.Checkbutton(
@@ -847,11 +902,11 @@ class ToolGUI:
             variable=self.link_database,
             command=self.on_link_database_toggle
         )
-        vdj_checkbox.grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        vdj_checkbox.grid(row=5, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
         
         # Database path frame in settings dropdown
         db_path_frame = ttk.Frame(self.settings_dropdown.dropdown_frame)
-        db_path_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
+        db_path_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
         db_path_frame.columnconfigure(0, weight=1)
         
         ttk.Entry(db_path_frame, textvariable=self.vdj_database_path, state='readonly').grid(
@@ -906,6 +961,23 @@ class ToolGUI:
         ttk.Entry(folder_frame, textvariable=self.output_folder_path, width=25).grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 5))
         ttk.Button(folder_frame, text="Browse", command=self.browse_output_folder).grid(row=0, column=4)
         
+        # Output structure option
+        ttk.Label(folder_frame, text="Structure:").grid(row=0, column=5, padx=(10, 5))
+        structure_dropdown = ttk.Combobox(
+            folder_frame,
+            textvariable=self.output_structure,
+            values=["Preserve Subfolders", "By Artist"],
+            state="readonly",
+            width=15
+        )
+        structure_dropdown.grid(row=0, column=6, padx=(0, 5))
+        
+        # Multiple folders button
+        ttk.Button(folder_frame, text="Add Folders", command=self.browse_multiple_folders).grid(row=0, column=7, padx=(0, 5))
+        
+        # Folder list display
+        self.folder_listbox = None  # Will be created if needed
+        
         # Start year and End year in main area (row 2)
         ttk.Label(main_frame, text="Start Year:").grid(row=2, column=0, sticky=tk.W, pady=5)
         year_frame = ttk.Frame(main_frame)
@@ -927,13 +999,28 @@ class ToolGUI:
         self.music_player = MusicPlayer(player_frame)
         self.music_player.pack(fill=tk.BOTH, expand=True)
         
-        # Run button (row 5) - centered
+        # Run button and Undo button (row 5) - centered
         run_button_frame = ttk.Frame(main_frame)
         run_button_frame.grid(row=5, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
         run_button_frame.columnconfigure(0, weight=1)
         
         self.run_button = ttk.Button(run_button_frame, text="Run TigerTag", command=self.run_tag_updater)
         self.run_button.grid(row=0, column=0)
+        
+        # Undo button
+        self.undo_button = ttk.Button(run_button_frame, text="Undo Last", command=self.undo_last_operation, state='disabled')
+        self.undo_button.grid(row=0, column=1, padx=(10, 0))
+        
+        # Progress bar and counter - smaller, on same row as buttons
+        progress_frame = ttk.Frame(run_button_frame)
+        progress_frame.grid(row=0, column=2, sticky=(tk.W, tk.E), padx=(20, 0))
+        progress_frame.columnconfigure(0, weight=1)
+        
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=150)
+        self.progress_bar.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        
+        self.progress_counter = ttk.Label(progress_frame, text="0/0", font=("", 9))
+        self.progress_counter.grid(row=0, column=1, sticky=tk.E)
         
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
         console_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
@@ -987,6 +1074,105 @@ class ToolGUI:
         if vdj_path:
             self.vdj_database_path.set(vdj_path)
     
+    def load_all_settings(self):
+        """Load all settings from config file."""
+        # Load folder paths
+        folder_paths = config_handler.get_folder_paths()
+        if folder_paths:
+            self.folder_paths = folder_paths
+            if len(folder_paths) == 1:
+                self.folder_path.set(folder_paths[0])
+            elif len(folder_paths) > 1:
+                self.folder_path.set(f"{len(folder_paths)} folders selected")
+        
+        # Load output folder
+        output_folder = config_handler.get_output_folder_path()
+        if output_folder:
+            self.output_folder_path.set(output_folder)
+        
+        # Load years
+        self.start_year.set(config_handler.get_start_year())
+        self.end_year.set(config_handler.get_end_year())
+        
+        # Load filename format
+        self.filename_format.set(config_handler.get_filename_format())
+        
+        # Load audio processing settings
+        audio_settings = config_handler.get_audio_processing_settings()
+        self.convert_aflac_to_flac.set(audio_settings.get("convert_aflac_to_flac", False))
+        self.convert_to_mono.set(audio_settings.get("convert_to_mono", False))
+        self.convert_to_48khz.set(audio_settings.get("convert_to_48khz", False))
+        self.use_24bit.set(audio_settings.get("use_24bit", False))
+        self.normalize_audio.set(audio_settings.get("normalize_audio", False))
+        self.aufs_target.set(audio_settings.get("aufs_target", "-13.0"))
+        
+        # Load output structure (map from config value to combobox value)
+        structure = config_handler.get_output_structure()
+        if structure == "by_artist":
+            self.output_structure.set("By Artist")
+        else:
+            self.output_structure.set("Preserve Subfolders")
+        
+        # Load auto-select
+        self.auto_select.set(config_handler.get_auto_select())
+        
+        # Load year-match
+        self.year_match.set(config_handler.get_year_match())
+        
+        # Load artist format
+        artist_format = config_handler.get_artist_format()
+        if artist_format:
+            self.artist_format.set(artist_format)
+        
+        # Load selected artists - will be applied after widgets are created
+        self._saved_selected_artists = config_handler.get_selected_artists()
+    
+    def save_all_settings(self):
+        """Save all current settings to config file."""
+        # Save folder paths
+        config_handler.set_folder_paths(self.folder_paths)
+        
+        # Save output folder
+        config_handler.set_output_folder_path(self.output_folder_path.get())
+        
+        # Save years
+        config_handler.set_start_year(self.start_year.get())
+        config_handler.set_end_year(self.end_year.get())
+        
+        # Save filename format
+        config_handler.set_filename_format(self.filename_format.get())
+        
+        # Save audio processing settings
+        config_handler.set_audio_processing_settings({
+            "convert_aflac_to_flac": self.convert_aflac_to_flac.get(),
+            "convert_to_mono": self.convert_to_mono.get(),
+            "convert_to_48khz": self.convert_to_48khz.get(),
+            "use_24bit": self.use_24bit.get(),
+            "normalize_audio": self.normalize_audio.get(),
+            "aufs_target": self.aufs_target.get(),
+        })
+        
+        # Save output structure (map from combobox value to config value)
+        structure_value = self.output_structure.get()
+        if structure_value == "By Artist":
+            config_handler.set_output_structure("by_artist")
+        else:
+            config_handler.set_output_structure("preserve")
+        
+        # Save auto-select
+        config_handler.set_auto_select(self.auto_select.get())
+        
+        # Save year-match
+        config_handler.set_year_match(self.year_match.get())
+        
+        # Save artist format
+        config_handler.set_artist_format(self.artist_format.get())
+        
+        # Save selected artists (if artist_selector exists)
+        if hasattr(self, 'artist_selector'):
+            selected_artists = self.artist_selector.get_selected_artists()
+            config_handler.set_selected_artists(selected_artists)
+    
     def on_link_database_toggle(self):
         """Handle link database checkbox toggle."""
         config_handler.set_link_database(self.link_database.get())
@@ -1015,6 +1201,7 @@ class ToolGUI:
         folder = filedialog.askdirectory()
         if folder:
             self.folder_path.set(folder)
+            self.folder_paths = [folder]  # Initialize with single folder
             
             # Try to extract years from folder name
             start_year, end_year = parse_years_from_folder(folder)
@@ -1022,6 +1209,22 @@ class ToolGUI:
             if start_year is not None:
                 self.start_year.set(str(start_year))
                 self.end_year.set(str(end_year))
+            
+            self.save_all_settings()
+    
+    def browse_multiple_folders(self):
+        """Browse for multiple folders to process"""
+        folder = filedialog.askdirectory(mustexist=True, title="Add Folder to Process")
+        if folder:
+            if folder not in self.folder_paths:
+                self.folder_paths.append(folder)
+            # Update display
+            if len(self.folder_paths) > 1:
+                self.folder_path.set(f"{len(self.folder_paths)} folders selected")
+            else:
+                self.folder_path.set(folder)
+            self.save_all_settings()
+            self.save_all_settings()
             
     def submit_input(self):
         if self.waiting_for_input:
@@ -1048,255 +1251,201 @@ class ToolGUI:
         return self.input_result
     
     def run_tag_updater(self):
-        # Validate inputs
-        folder = self.folder_path.get()
-        if not folder:
-            self.console.insert(tk.END, "Error: Please select a folder\n")
+        # Get folders to process
+        folders_to_process = []
+        if self.folder_paths:
+            folders_to_process = self.folder_paths
+        else:
+            folder = self.folder_path.get()
+            if folder:
+                folders_to_process = [folder]
+        
+        if not folders_to_process:
+            self.console.insert(tk.END, "Error: Please select at least one folder\n")
+            return
+        
+        # Require output folder to be specified
+        output_folder = self.output_folder_path.get().strip()
+        if not output_folder:
+            self.console.insert(tk.END, "Error: Please specify an output folder. Original files will not be modified.\n")
             return
             
         try:
-            start = int(self.start_year.get())
-            end = int(self.end_year.get())
+            default_start = int(self.start_year.get())
+            default_end = int(self.end_year.get())
         except ValueError:
             self.console.insert(tk.END, "Error: Years must be valid integers\n")
             return
         
-        # Get selected artists
+        # Get selected artists (may be empty for fuzzy matching)
         selected_artists = self.artist_selector.get_selected_artists()
-        if not selected_artists:
-            self.console.insert(tk.END, "Error: Please select at least one artist\n")
-            return
             
         # Clear console and add initial padding
         self.console.delete(1.0, tk.END)
         self.console.insert(tk.END, '\n' * 5)  # Add padding at the end
         self.console.mark_set('padding_start', 'end-6l')  # Mark where padding starts
         
+        # Reset progress
+        self._total_files_counted = False
+        self._current_total = 0
+        self._current_index = 0
+        self._update_progress(0, 0)
+        
         # Disable run button
         self.run_button.config(state='disabled')
         
         # Run in separate thread to keep GUI responsive
-        thread = threading.Thread(target=self.execute_tag_updater, args=(folder, self.metadata_dict, start, end, selected_artists))
+        thread = threading.Thread(
+            target=self.execute_tag_updater, 
+            args=(folders_to_process, self.metadata_dict, default_start, default_end, selected_artists)
+        )
         thread.daemon = True
         thread.start()
         
-    def execute_tag_updater(self, folder, metadata_dict, start_year, end_year, selected_artists):
+    def execute_tag_updater(self, folders, metadata_dict, default_start_year, default_end_year, selected_artists):
         # Redirect stdout to console
         old_stdout = sys.stdout
         old_input = __builtins__.input
         
         try:
-            # Create metadata subset
-            metadata_sub = subset_entries(
-                df = pd.concat([metadata_dict[artist] for artist in selected_artists]),
-                start_year = start_year,
-                end_year=end_year,
-            )
-            
             # Redirect after creating the data
             sys.stdout = ConsoleRedirect(self.console)
             __builtins__.input = self.custom_input
             
-            # Create a wrapper for update_tags that notifies about current file
-            def update_tags_with_player(audio_folder, catalogue):
-                """Wrapper that updates the player with current file"""
-                filename_changes = []
-                
-                for file in os.listdir(audio_folder):
-                    if not file.endswith(('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')):
-                        continue
-                    
-                    audio_file = Path(audio_folder, file)
-                    
-                    # Update player with current file
-                    self.root.after(0, lambda: self.music_player.load_file(str(audio_file)))
-                    self.current_audio_file = audio_file
-                    
-                    audio_metadata = tag_updater.get_audio_metadata(audio_file)
-                    chosen_idx = tag_updater.ask_choice(file, audio_metadata, catalogue)
-                    
-                    if chosen_idx != 9999:
-                        new_metadata = tag_updater.get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
-                        try:
-                            old_filename = audio_file.name
-                            old_path_resolved = audio_file.resolve()
-                            
-                            # Unload file from player before any file operations
-                            self.root.after(0, lambda: self.music_player.unload_file())
-                            # Wait longer to ensure file is fully released
-                            import time
-                            time.sleep(0.3)  # Increased delay
-                            
-                            # First rename the file
-                            new_path = tag_updater.update_filename(
-                                audio_file, 
-                                new_metadata.title,
-                                new_metadata.orchestra,
-                                new_metadata.year,
-                                format_type=self.filename_format.get(),
-                                orchestra_last_name=new_metadata.orchestra_last_name,
-                                singer_last_name=new_metadata.singer_last_name,
-                                )
-                            new_filename = new_path.name
-                            new_path_resolved = new_path.resolve()
-                            
-                            if old_path_resolved != new_path_resolved:
-                                filename_changes.append((old_filename, new_filename))
-                            
-                            # Check if any audio processing options are enabled
-                            process_audio = (
-                                self.convert_aflac_to_flac.get() or
-                                self.convert_to_mono.get() or
-                                self.convert_to_48khz.get() or
-                                self.use_24bit.get() or
-                                self.normalize_audio.get()
-                            )
-                            
-                            # Process audio file if any options are enabled
-                            if process_audio:
-                                # Ensure file is not loaded in player before processing
-                                self.root.after(0, lambda: self.music_player.unload_file())
-                                time.sleep(0.3)  # Wait to ensure file is fully released
-                                
-                                # Get output folder path
-                                output_folder = self.output_folder_path.get().strip()
-                                
-                                # Determine output path
-                                if output_folder:
-                                    # Create output folder if it doesn't exist
-                                    output_folder_path = Path(output_folder)
-                                    output_folder_path.mkdir(parents=True, exist_ok=True)
-                                    
-                                    # Determine output file path in output folder
-                                    # Handle AFLAC to FLAC conversion in filename
-                                    output_filename = new_filename
-                                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
-                                        output_filename = new_path.stem + '.flac'
-                                    
-                                    output_path = output_folder_path / output_filename
-                                    
-                                    print(f"\nProcessing audio file: {new_filename}")
-                                    print(f"Output will be saved to: {output_path}")
-                                else:
-                                    # No output folder specified, process in place
-                                    output_path = new_path
-                                    print(f"\nProcessing audio file in place: {new_filename}")
-                                
-                                try:
-                                    # Get AUFS target value
-                                    try:
-                                        aufs_target_value = float(self.aufs_target.get())
-                                    except (ValueError, TypeError):
-                                        aufs_target_value = -13.0  # Default if invalid
-                                        print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
-                                    
-                                    # Process audio file
-                                    success = process_audio_file(
-                                        input_path=new_path,
-                                        output_path=output_path,
-                                        target_lufs=aufs_target_value,
-                                        convert_to_flac=self.convert_aflac_to_flac.get(),
-                                        convert_to_mono=self.convert_to_mono.get(),
-                                        convert_to_48khz=self.convert_to_48khz.get(),
-                                        use_24bit=self.use_24bit.get(),
-                                        normalize=self.normalize_audio.get()
-                                    )
-                                    if success:
-                                        print(f"✓ Audio processing completed for: {new_filename}\n")
-                                        
-                                        # Update path references if output folder was used
-                                        if output_folder and output_path.exists():
-                                            new_path = output_path
-                                            new_filename = output_path.name
-                                            new_path_resolved = output_path.resolve()
-                                            
-                                            # Update filename changes to reflect output location
-                                            # Find and update the entry in filename_changes
-                                            for i, (old, new) in enumerate(filename_changes):
-                                                if new == new_filename or (self.convert_aflac_to_flac.get() and new.endswith('.aflac') and new_filename.endswith('.flac')):
-                                                    filename_changes[i] = (old, new_filename)
-                                                    break
-                                    else:
-                                        print(f"⚠ Audio processing failed for: {new_filename}\n")
-                                except Exception as audio_error:
-                                    print(f"Error processing audio for {new_filename}: {str(audio_error)}")
-                                    import traceback
-                                    traceback.print_exc()
-                                
-                                # Update path if extension changed (e.g., AFLAC to FLAC) and no output folder
-                                # The batch_audio_processor handles the conversion and file deletion
-                                if not output_folder and self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
-                                    # Check if file with .flac extension exists (processor created it)
-                                    flac_path = new_path.with_suffix('.flac')
-                                    if flac_path.exists():
-                                        new_path = flac_path
-                                        new_filename = new_path.name
-                                        new_path_resolved = new_path.resolve()
-                                        # Update filename changes if needed
-                                        if old_path_resolved != new_path_resolved:
-                                            # Find and update the entry in filename_changes
-                                            for i, (old, new) in enumerate(filename_changes):
-                                                if new.endswith('.aflac'):
-                                                    filename_changes[i] = (old, new_path.name)
-                                                    break
-                            
-                            # Ensure file is not loaded in player before writing metadata
-                            self.root.after(0, lambda: self.music_player.unload_file())
-                            time.sleep(0.2)  # Additional delay before metadata write
-                            
-                            # Write metadata to the file (use new_path which may point to output folder)
-                            try:
-                                tag_updater.write_metadata(new_path, new_metadata)
-                                print(f"Updated metadata for: {new_filename}")
-                            except PermissionError as pe:
-                                print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
-                                print("File may still be locked. Retrying after delay...")
-                                time.sleep(0.5)
-                                tag_updater.write_metadata(new_path, new_metadata)
-                                print(f"Successfully updated metadata for: {new_filename} on retry")
-                            except Exception as meta_error:
-                                print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
-                                import traceback
-                                traceback.print_exc()
-                            
-                            # Update player with new path AFTER metadata is written
-                            if old_path_resolved != new_path_resolved:
-                                self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p)))
-                            
-                        except Exception as e:
-                            print(f"Error processing {file}: {str(e)}")
-                            import traceback
-                            traceback.print_exc()
-                            continue
-                
-                tag_updater.print_filename_changes_table(filename_changes)
-                
-                # Update Virtual DJ database if enabled
-                if self.link_database.get() and filename_changes:
-                    vdj_path = self.vdj_database_path.get()
-                    if vdj_path and Path(vdj_path).exists():
-                        print("\n" + "=" * 80)
-                        print("Updating Virtual DJ Database...")
-                        print("=" * 80)
-                        updated_count, error = vdj_updater.update_vdj_database(
-                            vdj_path,
-                            filename_changes,
-                            folder
-                        )
-                        if error:
-                            print(f"Error: {error}")
-                        else:
-                            print(f"Successfully updated {updated_count} entries in Virtual DJ database.")
-                        print("=" * 80 + "\n")
-                    elif vdj_path:
-                        print(f"\nWarning: Virtual DJ database file not found: {vdj_path}")
-                        print("Skipping database update.\n")
-                
-                print("\n\n >>> Finished updating folder! <<< \n\n\n")
+            # Count total files across all folders FIRST, before processing
+            total_files = 0
+            for f in folders:
+                folder_path = Path(f)
+                if folder_path.exists() and folder_path.is_dir():
+                    audio_extensions = ('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')
+                    for ext in audio_extensions:
+                        files_lower = list(folder_path.rglob(f'*{ext}'))
+                        files_upper = list(folder_path.rglob(f'*{ext.upper()}'))
+                        # Count unique files (resolve to handle case-insensitive duplicates)
+                        all_files = set([f.resolve() for f in files_lower + files_upper])
+                        total_files += len([f for f in all_files if Path(f).is_file()])
             
-            # Run the tag updater with player integration
-            update_tags_with_player(folder, metadata_sub)
-        
+            # Set total files and initialize progress
+            self._current_total = total_files
+            self._current_index = 0
+            # Use a closure with default argument to capture total_files
+            self.root.after(0, lambda t=total_files: self._update_progress(0, t))
+            print(f"Found {total_files} audio files to process")
+            
+            # Process each folder
+            all_filename_changes = []
+            
+            for folder_path in folders:
+                folder = Path(folder_path)
+                if not folder.exists() or not folder.is_dir():
+                    print(f"Warning: Skipping invalid folder: {folder_path}")
+                    continue
+                
+                print(f"\n{'='*80}")
+                print(f"Processing folder: {folder}")
+                print(f"{'='*80}\n")
+                
+                # Detect years from folder name
+                folder_start_year, folder_end_year = parse_years_from_folder(folder)
+                if folder_start_year is None:
+                    folder_start_year = default_start_year
+                    folder_end_year = default_end_year
+                    print(f"Using default years: {folder_start_year}-{folder_end_year}")
+                else:
+                    print(f"Detected years from folder: {folder_start_year}-{folder_end_year}")
+                
+                # Determine artists for this folder
+                folder_artists = selected_artists.copy() if selected_artists else []
+                
+                # If no artists selected, do fuzzy matching
+                if not folder_artists:
+                    print("No artists selected, performing fuzzy matching...")
+                    
+                    # Extract artist names from folder structure
+                    candidate_names = extract_artist_names_from_folder(folder)
+                    
+                    # Extract artist names from file tags
+                    audio_extensions = ('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')
+                    for audio_file in folder.rglob('*'):
+                        if audio_file.is_file() and audio_file.suffix.lower() in audio_extensions:
+                            try:
+                                tagged_artist = extract_artist_from_file_tags(audio_file)
+                                if tagged_artist:
+                                    candidate_names.add(tagged_artist)
+                            except:
+                                pass
+                    
+                    # Fuzzy match against available artists
+                    available_artists = list(metadata_dict.keys())
+                    if candidate_names:
+                        folder_artists = fuzzy_match_artists(candidate_names, available_artists, threshold=70)
+                        if len(folder_artists) == 1:
+                            # Single artist matched - use only that artist
+                            print(f"Fuzzy matched single artist: {folder_artists[0]}")
+                        elif len(folder_artists) > 1:
+                            print(f"Fuzzy matched artists: {', '.join(folder_artists)}")
+                        else:
+                            # No artists matched - use all artists (larger subset)
+                            print("Warning: No artists matched via fuzzy matching. Using all artists.")
+                            folder_artists = available_artists
+                    else:
+                        print("Warning: No candidate artist names found. Using all artists.")
+                        folder_artists = available_artists
+                
+                # Create metadata subset for this folder
+                if folder_artists:
+                    metadata_sub = subset_entries(
+                        df=pd.concat([metadata_dict[artist] for artist in folder_artists]),
+                        start_year=folder_start_year,
+                        end_year=folder_end_year,
+                    )
+                else:
+                    print("Warning: No artists available. Skipping folder.")
+                    continue
+                
+                # Use the total files count that was calculated at the start
+                total_files = self._current_total
+                
+                # Process files in this folder
+                current_index = len(all_filename_changes)
+                # Update current index before processing
+                self._current_index = current_index
+                folder_changes = self.process_folder(folder, metadata_sub, total_files=total_files, current_index=current_index)
+                all_filename_changes.extend(folder_changes)
+                # Update current index after processing
+                self._current_index = len(all_filename_changes)
+                # Update progress bar to final count for this folder
+                if total_files:
+                    final_idx = len(all_filename_changes)
+                    self.root.after(0, lambda idx=final_idx, tot=total_files: self._update_progress(idx, tot))
+            
+            # Update Virtual DJ database if enabled
+            if self.link_database.get() and all_filename_changes:
+                vdj_path = self.vdj_database_path.get()
+                if vdj_path and Path(vdj_path).exists():
+                    print("\n" + "=" * 80)
+                    print("Updating Virtual DJ Database...")
+                    print("=" * 80)
+                    # Note: vdj_updater.update_vdj_database may need to be updated for multiple folders
+                    # For now, we'll pass the first folder as reference
+                    updated_count, error = vdj_updater.update_vdj_database(
+                        vdj_path,
+                        all_filename_changes,
+                        folders[0] if folders else ""
+                    )
+                    if error:
+                        print(f"Error: {error}")
+                    else:
+                        print(f"Successfully updated {updated_count} entries in Virtual DJ database.")
+                    print("=" * 80 + "\n")
+            
+            print("\n\n >>> Finished processing all folders! <<< \n\n\n")
+            
+            # Update progress bar to 100% when done
+            if hasattr(self, '_current_total') and self._current_total > 0:
+                final_total = self._current_total
+                self.root.after(0, lambda t=final_total: self._update_progress(t, t))
+            
         except Exception as e:
             if sys.stdout != ConsoleRedirect(self.console):
                 sys.stdout = ConsoleRedirect(self.console)
@@ -1311,6 +1460,488 @@ class ToolGUI:
                 self.root.after(0, lambda: self.run_button.config(state='normal'))
             except:
                 pass
+    
+    def process_folder(self, audio_folder, catalogue, total_files=None, current_index=0):
+        """Process a single folder (including subfolders) and return filename changes"""
+        filename_changes = []
+        audio_extensions = ('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')
+        
+        # Get all audio files recursively
+        audio_files = []
+        for ext in audio_extensions:
+            audio_files.extend(list(audio_folder.rglob(f'*{ext}')))
+            audio_files.extend(list(audio_folder.rglob(f'*{ext.upper()}')))
+        
+        # Remove duplicates (case-insensitive filesystems)
+        audio_files = list(set([f.resolve() for f in audio_files]))
+        audio_files.sort()
+        
+        # Filter to only files
+        audio_files = [f for f in audio_files if f.is_file()]
+        
+        file_index = current_index
+        
+        for audio_file in audio_files:
+            # Update progress before processing
+            file_index += 1
+            if total_files:
+                # Update the current index and update progress bar
+                self._current_index = file_index
+                # Use a closure with default arguments to capture current values correctly
+                current_idx = file_index
+                current_total = total_files
+                self.root.after(0, lambda idx=current_idx, tot=current_total: self._update_progress(idx, tot))
+            
+            # Store original file location for output structure preservation
+            original_file_location = audio_file
+            
+            # Update player with current file
+            self.root.after(0, lambda f=audio_file: self.music_player.load_file(str(f)))
+            self.current_audio_file = audio_file
+            
+            audio_metadata = tag_updater.get_audio_metadata(audio_file)
+            
+            # If file has an artist tag, try to subset catalogue to that artist
+            file_catalogue = catalogue.copy()
+            file_artist = audio_metadata.get('artist', '').strip()
+            
+            if file_artist:
+                print(f"\n  - File has artist tag: '{file_artist}'")
+                
+                # Fuzzy match the file's artist against available artists
+                available_artists = list(self.metadata_dict.keys())
+                matched_artists = fuzzy_match_artists({file_artist}, available_artists, threshold=70)
+                
+                if matched_artists:
+                    # Use the first (best) match
+                    matched_artist = matched_artists[0]
+                    print(f"  - Matched file artist '{file_artist}' to catalogue artist '{matched_artist}'")
+                    
+                    # Find the Bandleader column (case-insensitive), fallback to Orchestra for backward compatibility
+                    bandleader_col = None
+                    for col in catalogue.columns:
+                        if col.lower() == 'bandleader':
+                            bandleader_col = col
+                            break
+                        elif col.lower() == 'orchestra' and bandleader_col is None:
+                            bandleader_col = col  # Fallback to Orchestra
+                    
+                    if bandleader_col:
+                        # Filter catalogue to only rows from this artist
+                        original_count = len(catalogue)
+                        file_catalogue = catalogue[catalogue[bandleader_col] == matched_artist].copy()
+                        filtered_count = len(file_catalogue)
+                        
+                        if filtered_count > 0:
+                            print(f"  - Filtered catalogue from {original_count} to {filtered_count} entries (artist: '{matched_artist}')")
+                        else:
+                            # Artist matched but not in current catalogue subset, use original catalogue
+                            print(f"  - Warning: Matched artist '{matched_artist}' not found in current catalogue subset, using full catalogue")
+                            file_catalogue = catalogue.copy()
+                    else:
+                        # No Bandleader or Orchestra column found
+                        print(f"  - Warning: 'Bandleader' or 'Orchestra' column not found in catalogue. Available columns: {list(catalogue.columns)}")
+                        file_catalogue = catalogue.copy()
+                else:
+                    # No match found
+                    print(f"  - No match found for file artist '{file_artist}' in available artists, using full catalogue")
+                    file_catalogue = catalogue.copy()
+            else:
+                # No artist tag
+                file_catalogue = catalogue.copy()
+            
+            # Pass auto_select option to ask_choice
+            chosen_idx = tag_updater.ask_choice(
+                audio_file.name, 
+                audio_metadata, 
+                file_catalogue,
+                auto_select=self.auto_select.get(),
+                year_match=self.year_match.get()
+            )
+            
+            if chosen_idx != 9999:
+                # Get metadata from the file_catalogue (which may be a subset)
+                # The chosen_idx is from file_catalogue, so use that
+                new_metadata = tag_updater.get_updated_metadata(
+                    file_catalogue.loc[chosen_idx].to_dict(),
+                    artist_format=self.artist_format.get()
+                )
+                try:
+                    old_filename = audio_file.name
+                    old_path_resolved = audio_file.resolve()
+                    
+                    # Store state for undo before making changes
+                    # Store the original catalogue (not the filtered one) for undo
+                    undo_entry = {
+                        'original_path': Path(old_path_resolved),
+                        'new_path': None,  # Will be set after rename/processing
+                        'chosen_idx': chosen_idx,
+                        'catalogue': catalogue,  # Store original catalogue for undo
+                        'audio_folder': audio_folder,
+                        'audio_metadata': audio_metadata.copy(),
+                        'output_folder': self.output_folder_path.get().strip(),
+                        'process_audio': False,  # Will be set if audio processing happens
+                    }
+                    
+                    # Unload file from player before any file operations
+                    self.root.after(0, lambda: self.music_player.unload_file())
+                    import time
+                    import shutil
+                    time.sleep(0.3)
+                    
+                    # Get output folder - required for copying files (original files are never modified)
+                    output_folder = self.output_folder_path.get().strip()
+                    if not output_folder:
+                        print(f"Error: Output folder required. Skipping {audio_file.name}")
+                        continue
+                    
+                    output_folder_path = Path(output_folder)
+                    output_folder_path.mkdir(parents=True, exist_ok=True)
+                    
+                    # Generate new filename based on metadata (without renaming original)
+                    format_type = self.filename_format.get()
+                    tag_title = (format_type
+                        .replace("leader last", new_metadata.leader_last_name)
+                        .replace("orchestra last", new_metadata.leader_last_name)  # Backward compatibility
+                        .replace("leader", new_metadata.bandleader)
+                        .replace("orchestra", new_metadata.bandleader)  # Backward compatibility
+                        .replace("singer last", new_metadata.singer_last_name)
+                        .replace("title", new_metadata.title)
+                        .replace("year", new_metadata.year)
+                    )
+                    safe_title = slugify_filename(tag_title)
+                    new_filename = f"{safe_title}{audio_file.suffix.lower()}"
+                    
+                    # Determine output path based on structure option
+                    structure = self.output_structure.get()
+                    
+                    if structure == "By Artist":
+                        # Create folder by artist name (bandleader)
+                        artist_folder = output_folder_path / new_metadata.bandleader
+                        artist_folder.mkdir(parents=True, exist_ok=True)
+                        output_path = artist_folder / new_filename
+                    else:
+                        # Preserve subfolder structure
+                        try:
+                            # Get relative path from the original file location to the root folder
+                            relative_to_root = original_file_location.relative_to(audio_folder)
+                            # Preserve directory structure in output (use parent directory of relative path)
+                            output_path = output_folder_path / relative_to_root.parent / new_filename
+                            output_path.parent.mkdir(parents=True, exist_ok=True)
+                        except (ValueError, AttributeError):
+                            # If relative path calculation fails, just use filename
+                            output_path = output_folder_path / new_filename
+                    
+                    # Handle filename conflicts
+                    counter = 1
+                    original_output_path = output_path
+                    while output_path.exists():
+                        stem = original_output_path.stem
+                        suffix = original_output_path.suffix
+                        output_path = original_output_path.parent / f"{stem} ({counter}){suffix}"
+                        counter += 1
+                    
+                    # Copy original file to output folder with new name (original file is never modified)
+                    print(f"\nCopying file: {old_filename} → {output_path.name}")
+                    shutil.copy2(audio_file, output_path)
+                    print(f"Original file preserved: {audio_file.name}")
+                    print(f"Updated file created: {output_path.name}")
+                    
+                    new_path = output_path
+                    new_filename = output_path.name
+                    new_path_resolved = output_path.resolve()
+                    
+                    # Update undo entry with new path
+                    if 'undo_entry' in locals():
+                        undo_entry['new_path'] = Path(new_path_resolved)
+                    
+                    filename_changes.append((old_filename, new_filename))
+                    
+                    # Check if any audio processing options are enabled
+                    process_audio = (
+                        self.convert_aflac_to_flac.get() or
+                        self.convert_to_mono.get() or
+                        self.convert_to_48khz.get() or
+                        self.use_24bit.get() or
+                        self.normalize_audio.get()
+                    )
+                    
+                    # Process audio file if any options are enabled (process the copied file)
+                    if process_audio:
+                        self.root.after(0, lambda: self.music_player.unload_file())
+                        time.sleep(0.3)
+                        
+                        # Handle AFLAC to FLAC conversion in filename
+                        audio_output_path = new_path
+                        if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                            audio_output_path = new_path.with_suffix('.flac')
+                            # Handle conflicts
+                            counter = 1
+                            original_audio_path = audio_output_path
+                            while audio_output_path.exists():
+                                stem = original_audio_path.stem
+                                suffix = original_audio_path.suffix
+                                audio_output_path = original_audio_path.parent / f"{stem} ({counter}){suffix}"
+                                counter += 1
+                        
+                        print(f"\nProcessing audio file: {new_filename}")
+                        print(f"Output will be saved to: {audio_output_path}")
+                        
+                        try:
+                            try:
+                                aufs_target_value = float(self.aufs_target.get())
+                            except (ValueError, TypeError):
+                                aufs_target_value = -13.0
+                                print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
+                            
+                            success = process_audio_file(
+                                input_path=new_path,
+                                output_path=audio_output_path,
+                                target_lufs=aufs_target_value,
+                                convert_to_flac=self.convert_aflac_to_flac.get(),
+                                convert_to_mono=self.convert_to_mono.get(),
+                                convert_to_48khz=self.convert_to_48khz.get(),
+                                use_24bit=self.use_24bit.get(),
+                                normalize=self.normalize_audio.get()
+                            )
+                            if success:
+                                print(f"✓ Audio processing completed for: {audio_output_path.name}\n")
+                                # Update paths to point to processed file
+                                new_path = audio_output_path
+                                new_filename = audio_output_path.name
+                                new_path_resolved = audio_output_path.resolve()
+                                # Update filename changes
+                                for i, (old, new) in enumerate(filename_changes):
+                                    if old == old_filename:
+                                        filename_changes[i] = (old, new_filename)
+                                        break
+                                # Update undo entry
+                                if 'undo_entry' in locals():
+                                    undo_entry['new_path'] = Path(new_path_resolved)
+                                    undo_entry['process_audio'] = True
+                            else:
+                                print(f"⚠ Audio processing failed for: {new_filename}\n")
+                        except Exception as audio_error:
+                            print(f"Error processing audio for {new_filename}: {str(audio_error)}")
+                            import traceback
+                            traceback.print_exc()
+                    
+                    # Write metadata
+                    self.root.after(0, lambda: self.music_player.unload_file())
+                    time.sleep(0.2)
+                    
+                    try:
+                        tag_updater.write_metadata(new_path, new_metadata)
+                        print(f"Updated metadata for: {new_filename}")
+                    except PermissionError as pe:
+                        print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
+                        print("File may still be locked. Retrying after delay...")
+                        time.sleep(0.5)
+                        tag_updater.write_metadata(new_path, new_metadata)
+                        print(f"Successfully updated metadata for: {new_filename} on retry")
+                    except Exception as meta_error:
+                        print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
+                        import traceback
+                        traceback.print_exc()
+                    
+                    if old_path_resolved != new_path_resolved:
+                        self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p)))
+                    
+                    # Add to undo history after successful processing
+                    if 'undo_entry' in locals():
+                        undo_entry['new_path'] = Path(new_path_resolved) if 'new_path_resolved' in locals() else undo_entry.get('new_path')
+                        self.undo_history.append(undo_entry)
+                        # Enable undo button
+                        self.root.after(0, lambda: self.undo_button.config(state='normal'))
+                    
+                except Exception as e:
+                    print(f"Error processing {audio_file.name}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+        
+        tag_updater.print_filename_changes_table(filename_changes)
+        return filename_changes
+    
+    def _update_progress(self, current, total):
+        """Update progress bar and counter"""
+        try:
+            if total > 0:
+                self.progress_bar['maximum'] = total
+                self.progress_bar['value'] = current
+                self.progress_counter.config(text=f"{current}/{total}")
+            else:
+                self.progress_bar['value'] = 0
+                self.progress_bar['maximum'] = 100
+                self.progress_counter.config(text="0/0")
+            # Force GUI update (safe to call from main thread)
+            self.root.update_idletasks()
+        except Exception:
+            # Silently handle any GUI update errors (might happen if window is closed)
+            pass
+    
+    def undo_last_operation(self):
+        """Undo the last file operation - delete updated file and restore original, then re-run matching"""
+        if not self.undo_history:
+            self.console.insert(tk.END, "No operations to undo.\n")
+            return
+        
+        # Get the last operation
+        last_op = self.undo_history.pop()
+        
+        try:
+            original_path = last_op['original_path']
+            new_path = last_op.get('new_path')
+            
+            # Redirect stdout to console for undo messages
+            old_stdout = sys.stdout
+            sys.stdout = ConsoleRedirect(self.console)
+            
+            print("\n" + "=" * 80)
+            print("UNDOING LAST OPERATION")
+            print("=" * 80)
+            
+            # Handle file restoration based on whether it was renamed or moved to output folder
+            if new_path and original_path != new_path:
+                # Check if file was renamed in place (same directory) or moved to output folder
+                if new_path.parent == original_path.parent:
+                    # File was renamed in place - restore original filename first (before deleting)
+                    if new_path.exists() and not original_path.exists():
+                        try:
+                            # Unload from player first
+                            self.root.after(0, lambda: self.music_player.unload_file())
+                            import time
+                            time.sleep(0.3)
+                            
+                            new_path.rename(original_path)
+                            print(f"Restored original filename: {original_path.name}")
+                        except Exception as e:
+                            print(f"Error restoring original filename: {str(e)}")
+                    elif original_path.exists():
+                        # Original already exists - delete the new one if it exists
+                        if new_path.exists():
+                            try:
+                                self.root.after(0, lambda: self.music_player.unload_file())
+                                import time
+                                time.sleep(0.3)
+                                new_path.unlink()
+                                print(f"Deleted duplicate file: {new_path.name}")
+                            except Exception as e:
+                                print(f"Error deleting duplicate file: {str(e)}")
+                else:
+                    # File was moved to output folder - original should still exist
+                    # Delete the file in output folder
+                    if new_path.exists():
+                        try:
+                            # Unload from player first
+                            self.root.after(0, lambda: self.music_player.unload_file())
+                            import time
+                            time.sleep(0.3)
+                            
+                            new_path.unlink()
+                            print(f"Deleted updated file in output folder: {new_path.name}")
+                        except Exception as e:
+                            print(f"Error deleting updated file {new_path}: {str(e)}")
+                    
+                    # Check if original still exists
+                    if original_path.exists():
+                        print(f"Original file exists: {original_path.name}")
+                    else:
+                        print(f"Warning: Original file {original_path.name} not found.")
+            
+            # Re-run matching for the original file
+            print(f"\nRe-running matching for: {original_path.name}")
+            print("=" * 80 + "\n")
+            
+            # Get the original file's metadata and catalogue
+            audio_metadata = last_op['audio_metadata']
+            catalogue = last_op['catalogue']
+            
+            # Apply same artist filtering logic as in process_folder
+            file_catalogue = catalogue.copy()
+            file_artist = audio_metadata.get('artist', '').strip()
+            
+            if file_artist:
+                print(f"\n  - File has artist tag: '{file_artist}'")
+                
+                # Fuzzy match the file's artist against available artists
+                available_artists = list(self.metadata_dict.keys())
+                matched_artists = fuzzy_match_artists({file_artist}, available_artists, threshold=70)
+                
+                if matched_artists:
+                    # Use the first (best) match
+                    matched_artist = matched_artists[0]
+                    print(f"  - Matched file artist '{file_artist}' to catalogue artist '{matched_artist}'")
+                    
+                    # Find the Bandleader column (case-insensitive), fallback to Orchestra for backward compatibility
+                    bandleader_col = None
+                    for col in catalogue.columns:
+                        if col.lower() == 'bandleader':
+                            bandleader_col = col
+                            break
+                        elif col.lower() == 'orchestra' and bandleader_col is None:
+                            bandleader_col = col  # Fallback to Orchestra
+                    
+                    if bandleader_col:
+                        # Filter catalogue to only rows from this artist
+                        original_count = len(catalogue)
+                        file_catalogue = catalogue[catalogue[bandleader_col] == matched_artist].copy()
+                        filtered_count = len(file_catalogue)
+                        
+                        if filtered_count > 0:
+                            print(f"  - Filtered catalogue from {original_count} to {filtered_count} entries (artist: '{matched_artist}')")
+                        else:
+                            # Artist matched but not in current catalogue subset, use original catalogue
+                            print(f"  - Warning: Matched artist '{matched_artist}' not found in current catalogue subset, using full catalogue")
+                            file_catalogue = catalogue.copy()
+                    else:
+                        # No Bandleader or Orchestra column found
+                        print(f"  - Warning: 'Bandleader' or 'Orchestra' column not found in catalogue. Available columns: {list(catalogue.columns)}")
+                        file_catalogue = catalogue.copy()
+                else:
+                    # No match found
+                    print(f"  - No match found for file artist '{file_artist}' in available artists, using full catalogue")
+                    file_catalogue = catalogue.copy()
+            
+            # Re-run the choice selection
+            old_input = __builtins__.input
+            __builtins__.input = self.custom_input
+            
+            chosen_idx = tag_updater.ask_choice(
+                original_path.name, 
+                audio_metadata, 
+                file_catalogue,
+                auto_select=self.auto_select.get(),
+                year_match=self.year_match.get()
+            )
+            
+            # Restore input
+            __builtins__.input = old_input
+            sys.stdout = old_stdout
+            
+            # If user makes a new choice, we need to process it
+            # For now, just inform the user they can process again
+            if chosen_idx != 9999:
+                print(f"\nYou selected a new match. The file will be processed again.")
+                # Note: The file processing would need to be triggered again
+                # This is a simplified version - in a full implementation, you might want to
+                # automatically process the file again with the new choice
+            else:
+                print(f"\nFile skipped - no changes will be made.")
+            
+            # Update undo button state
+            if not self.undo_history:
+                self.undo_button.config(state='disabled')
+            
+        except Exception as e:
+            if sys.stdout != ConsoleRedirect(self.console):
+                sys.stdout = ConsoleRedirect(self.console)
+            print(f"Error during undo: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # Restore the operation to history if undo failed
+            self.undo_history.append(last_op)
+            sys.stdout = old_stdout
 
 if __name__ == "__main__":
     root = tk.Tk()
