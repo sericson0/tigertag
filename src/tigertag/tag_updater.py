@@ -27,10 +27,11 @@ EASYID3_CANONICAL = set(EasyID3.valid_keys.keys())
 
 @dataclass
 class MetaData:
-    title     : str
-    orchestra : str
-    genre     : str
-    year      : str
+    title     : str = ""
+    bandleader: str = ""  # Changed from orchestra to bandleader
+    orchestra : str = ""  # Keep orchestra as separate field for comments
+    genre     : str = ""
+    year      : str = ""
     label     : str = ""
     date      : str = ""
     master    : str = ""
@@ -45,23 +46,26 @@ class MetaData:
     lineup    : str = None
     comment   : str = None
     artist    : str = None
-    orchestra_last_name : str = None
+    leader_last_name : str = None  # Changed from orchestra_last_name
     singer_last_name : str = None
     
     def __post_init__(self):
-        self.artist = f"{self.orchestra} - {self.singer}"
-        self.orchestra_last_name = self._get_last_name(self.orchestra)
+        self.artist = f"{self.bandleader} - {self.singer}"
+        self.leader_last_name = self._get_last_name(self.bandleader)
         self.singer_last_name = self._get_last_name(self.singer)
         self.lineup = self._get_lineup()
         comment = ""
-        for val in ["orchestra", "singer", "date", "label", "grouping", "master", "composer", "author", "pianist",
+        for val in ["bandleader", "orchestra", "singer", "date", "label", "grouping", "master", "composer", "author", "pianist",
                   "bassist", "bandoneons", "strings"]:
             if getattr(self, val) != "":
                 comment += f"{val.capitalize()}: {getattr(self, val)}\n"
         self.comment = self._build_comment()
 
     def _build_comment(self):
-        comment = f"Orchestra: {self.orchestra}, Singer: {self.singer}\n"
+        comment = f"Bandleader: {self.bandleader}, Singer: {self.singer}\n"
+        # Add orchestra if it exists
+        if self.orchestra and str(self.orchestra).strip():
+            comment += f"Orchestra: {self.orchestra}\n"
         comment += f"Date: {self.date}, Grouping: {self.grouping}\n"
         comment += f"Composer: {self.composer}, Author: {self.author}\n"
         comment += f"Lineup: {self.lineup}\n"
@@ -159,7 +163,8 @@ def get_updated_metadata(dct: dict):
     
     new_metadata = MetaData(
         title      = clean_value(dct.get("title", "")),
-        orchestra  = clean_value(dct.get("orchestra", "")),
+        bandleader = clean_value(dct.get("bandleader", "")),  # Changed from orchestra
+        orchestra  = clean_value(dct.get("orchestra", "")),  # Keep orchestra as separate field
         genre      = clean_value(dct.get("genre", "")),
         year       = clean_value(dct.get("year", "")),
         date       = clean_value(dct.get("date", "")),
@@ -530,7 +535,7 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame, auto_se
     for n, idx in enumerate(candidate_indices, 1):
         row = catalogue.loc[idx]
         title = row.get('Title', 'N/A')
-        artist = row.get('Orchestra', 'N/A')
+        artist = row.get('Bandleader', row.get('Orchestra', 'N/A'))  # Try Bandleader first, fallback to Orchestra
         singer = row.get('Singer', 'N/A')
         date = row.get('Date', 'N/A')
         
@@ -562,7 +567,7 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame, auto_se
                     for n, idx in enumerate(custom_candidates, 1):
                         row = catalogue.loc[idx]
                         title = row.get('Title', 'N/A')
-                        artist = row.get('Orchestra', 'N/A')
+                        artist = row.get('Bandleader', row.get('Orchestra', 'N/A'))  # Try Bandleader first, fallback to Orchestra
                         singer = row.get('Singer', 'N/A')
                         date = row.get('Date', 'N/A')
                         print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")
@@ -593,7 +598,7 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame, auto_se
                     for n, idx in enumerate(candidate_indices, 1):
                         row = catalogue.loc[idx]
                         title = row.get('Title', 'N/A')
-                        artist = row.get('Orchestra', 'N/A')
+                        artist = row.get('Bandleader', row.get('Orchestra', 'N/A'))  # Try Bandleader first, fallback to Orchestra
                         singer = row.get('Singer', 'N/A')
                         date = row.get('Date', 'N/A')
                         print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")
@@ -615,7 +620,7 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame, auto_se
                     for n, idx in enumerate(candidate_indices, 1):
                         row = catalogue.loc[idx]
                         title = row.get('Title', 'N/A')
-                        artist = row.get('Orchestra', 'N/A')
+                        artist = row.get('Bandleader', row.get('Orchestra', 'N/A'))  # Try Bandleader first, fallback to Orchestra
                         singer = row.get('Singer', 'N/A')
                         date = row.get('Date', 'N/A')
                         print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")

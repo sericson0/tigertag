@@ -14,7 +14,7 @@ def load_config() -> dict:
         "output_folder_path": "",
         "start_year": "1900",
         "end_year": "2050",
-        "filename_format": "orchestra last - title - singer last - year",
+        "filename_format": "leader last - title - singer last - year",
         "convert_aflac_to_flac": False,
         "convert_to_mono": False,
         "convert_to_48khz": False,
@@ -118,7 +118,7 @@ def set_end_year(year: str) -> None:
 def get_filename_format() -> str:
     """Get the filename format from config."""
     config = load_config()
-    return config.get("filename_format", "orchestra last - title - singer last - year")
+    return config.get("filename_format", "leader last - title - singer last - year")
 
 def set_filename_format(format_str: str) -> None:
     """Set the filename format in config."""

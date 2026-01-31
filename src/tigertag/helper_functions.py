@@ -9,17 +9,20 @@ def strip_accents(text: str) -> str:
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower()
 
 
-def update_filename(path: Path, title: str, orchestra: str = "", year: str = "", 
-                   format_type: str = "orchestra - title - year", 
-                   orchestra_last_name: str = "", singer_last_name: str = "") -> Path:
+def update_filename(path: Path, title: str, bandleader: str = "", year: str = "", 
+                   format_type: str = "leader - title - year", 
+                   leader_last_name: str = "", singer_last_name: str = "") -> Path:
     """Rename the file to a slugified version based on the selected format, preserving the extension."""
     if not path.is_file():
         raise ValueError(f"Path is not a file: {path}")
 
     # Build tag title based on format
+    # Support both old "orchestra" and new "leader" formats for backward compatibility
     tag_title = (format_type
-    .replace("orchestra last", orchestra_last_name)
-    .replace("orchestra", orchestra)
+    .replace("leader last", leader_last_name)
+    .replace("orchestra last", leader_last_name)  # Backward compatibility
+    .replace("leader", bandleader)
+    .replace("orchestra", bandleader)  # Backward compatibility
     .replace("singer last", singer_last_name)
     .replace("title", title)
     .replace("year", year)

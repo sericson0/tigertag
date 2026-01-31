@@ -759,7 +759,7 @@ class ToolGUI:
         self.folder_paths = []  # List of folder paths for multiple folder processing
         self.start_year = tk.StringVar(value="1900")
         self.end_year = tk.StringVar(value="2050")
-        self.filename_format = tk.StringVar(value="orchestra last - title - singer last - year")  # Default format
+        self.filename_format = tk.StringVar(value="leader last - title - singer last - year")  # Default format
         self.input_var = tk.StringVar()
         self.waiting_for_input = False
         self.input_result = None
@@ -850,14 +850,14 @@ class ToolGUI:
         # Filename format in settings dropdown
         ttk.Label(self.settings_dropdown.dropdown_frame, text="Filename Format:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         format_options = [
-            "title - orchestra last - singer last - year",
-            "title - orchestra last - year",
-            "title - orchestra - year",
-            "orchestra last - title - singer last - year",
-            "orchestra last - singer last - title - year",
-            "orchestra last - title - year",
-            "orchestra - title - singer last - year",
-            "orchestra - title - year",
+            "title - leader last - singer last - year",
+            "title - leader last - year",
+            "title - leader - year",
+            "leader last - title - singer last - year",
+            "leader last - singer last - title - year",
+            "leader last - title - year",
+            "leader - title - singer last - year",
+            "leader - title - year",
         ]
         format_dropdown = ttk.Combobox(
             self.settings_dropdown.dropdown_frame,
@@ -1489,17 +1489,19 @@ class ToolGUI:
                     matched_artist = matched_artists[0]
                     print(f"  - Matched file artist '{file_artist}' to catalogue artist '{matched_artist}'")
                     
-                    # Find the Orchestra column (case-insensitive)
-                    orchestra_col = None
+                    # Find the Bandleader column (case-insensitive), fallback to Orchestra for backward compatibility
+                    bandleader_col = None
                     for col in catalogue.columns:
-                        if col.lower() == 'orchestra':
-                            orchestra_col = col
+                        if col.lower() == 'bandleader':
+                            bandleader_col = col
                             break
+                        elif col.lower() == 'orchestra' and bandleader_col is None:
+                            bandleader_col = col  # Fallback to Orchestra
                     
-                    if orchestra_col:
+                    if bandleader_col:
                         # Filter catalogue to only rows from this artist
                         original_count = len(catalogue)
-                        file_catalogue = catalogue[catalogue[orchestra_col] == matched_artist].copy()
+                        file_catalogue = catalogue[catalogue[bandleader_col] == matched_artist].copy()
                         filtered_count = len(file_catalogue)
                         
                         if filtered_count > 0:
@@ -1509,8 +1511,8 @@ class ToolGUI:
                             print(f"  - Warning: Matched artist '{matched_artist}' not found in current catalogue subset, using full catalogue")
                             file_catalogue = catalogue.copy()
                     else:
-                        # No Orchestra column found
-                        print(f"  - Warning: 'Orchestra' column not found in catalogue. Available columns: {list(catalogue.columns)}")
+                        # No Bandleader or Orchestra column found
+                        print(f"  - Warning: 'Bandleader' or 'Orchestra' column not found in catalogue. Available columns: {list(catalogue.columns)}")
                         file_catalogue = catalogue.copy()
                 else:
                     # No match found
@@ -1568,8 +1570,10 @@ class ToolGUI:
                     # Generate new filename based on metadata (without renaming original)
                     format_type = self.filename_format.get()
                     tag_title = (format_type
-                        .replace("orchestra last", new_metadata.orchestra_last_name)
-                        .replace("orchestra", new_metadata.orchestra)
+                        .replace("leader last", new_metadata.leader_last_name)
+                        .replace("orchestra last", new_metadata.leader_last_name)  # Backward compatibility
+                        .replace("leader", new_metadata.bandleader)
+                        .replace("orchestra", new_metadata.bandleader)  # Backward compatibility
                         .replace("singer last", new_metadata.singer_last_name)
                         .replace("title", new_metadata.title)
                         .replace("year", new_metadata.year)
@@ -1581,8 +1585,8 @@ class ToolGUI:
                     structure = self.output_structure.get()
                     
                     if structure == "By Artist":
-                        # Create folder by artist name (orchestra)
-                        artist_folder = output_folder_path / new_metadata.orchestra
+                        # Create folder by artist name (bandleader)
+                        artist_folder = output_folder_path / new_metadata.bandleader
                         artist_folder.mkdir(parents=True, exist_ok=True)
                         output_path = artist_folder / new_filename
                     else:
@@ -1838,17 +1842,19 @@ class ToolGUI:
                     matched_artist = matched_artists[0]
                     print(f"  - Matched file artist '{file_artist}' to catalogue artist '{matched_artist}'")
                     
-                    # Find the Orchestra column (case-insensitive)
-                    orchestra_col = None
+                    # Find the Bandleader column (case-insensitive), fallback to Orchestra for backward compatibility
+                    bandleader_col = None
                     for col in catalogue.columns:
-                        if col.lower() == 'orchestra':
-                            orchestra_col = col
+                        if col.lower() == 'bandleader':
+                            bandleader_col = col
                             break
+                        elif col.lower() == 'orchestra' and bandleader_col is None:
+                            bandleader_col = col  # Fallback to Orchestra
                     
-                    if orchestra_col:
+                    if bandleader_col:
                         # Filter catalogue to only rows from this artist
                         original_count = len(catalogue)
-                        file_catalogue = catalogue[catalogue[orchestra_col] == matched_artist].copy()
+                        file_catalogue = catalogue[catalogue[bandleader_col] == matched_artist].copy()
                         filtered_count = len(file_catalogue)
                         
                         if filtered_count > 0:
@@ -1858,8 +1864,8 @@ class ToolGUI:
                             print(f"  - Warning: Matched artist '{matched_artist}' not found in current catalogue subset, using full catalogue")
                             file_catalogue = catalogue.copy()
                     else:
-                        # No Orchestra column found
-                        print(f"  - Warning: 'Orchestra' column not found in catalogue. Available columns: {list(catalogue.columns)}")
+                        # No Bandleader or Orchestra column found
+                        print(f"  - Warning: 'Bandleader' or 'Orchestra' column not found in catalogue. Available columns: {list(catalogue.columns)}")
                         file_catalogue = catalogue.copy()
                 else:
                     # No match found
