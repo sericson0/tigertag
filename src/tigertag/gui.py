@@ -1151,6 +1151,8 @@ class ToolGUI:
         
         # Reset progress
         self._total_files_counted = False
+        self._current_total = 0
+        self._current_index = 0
         self._update_progress(0, 0)
         
         # Disable run button
@@ -1173,6 +1175,26 @@ class ToolGUI:
             # Redirect after creating the data
             sys.stdout = ConsoleRedirect(self.console)
             __builtins__.input = self.custom_input
+            
+            # Count total files across all folders FIRST, before processing
+            total_files = 0
+            for f in folders:
+                folder_path = Path(f)
+                if folder_path.exists() and folder_path.is_dir():
+                    audio_extensions = ('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')
+                    for ext in audio_extensions:
+                        files_lower = list(folder_path.rglob(f'*{ext}'))
+                        files_upper = list(folder_path.rglob(f'*{ext.upper()}'))
+                        # Count unique files (resolve to handle case-insensitive duplicates)
+                        all_files = set([f.resolve() for f in files_lower + files_upper])
+                        total_files += len([f for f in all_files if Path(f).is_file()])
+            
+            # Set total files and initialize progress
+            self._current_total = total_files
+            self._current_index = 0
+            # Use a closure with default argument to capture total_files
+            self.root.after(0, lambda t=total_files: self._update_progress(0, t))
+            print(f"Found {total_files} audio files to process")
             
             # Process each folder
             all_filename_changes = []
@@ -1245,30 +1267,21 @@ class ToolGUI:
                     print("Warning: No artists available. Skipping folder.")
                     continue
                 
-                # Count total files across all folders first (only once)
-                if not hasattr(self, '_total_files_counted'):
-                    total_files = 0
-                    for f in folders:
-                        folder_path = Path(f)
-                        if folder_path.exists() and folder_path.is_dir():
-                            audio_extensions = ('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')
-                            for ext in audio_extensions:
-                                files_lower = list(folder_path.rglob(f'*{ext}'))
-                                files_upper = list(folder_path.rglob(f'*{ext.upper()}'))
-                                # Count unique files (resolve to handle case-insensitive duplicates)
-                                all_files = set([f.resolve() for f in files_lower + files_upper])
-                                total_files += len([f for f in all_files if Path(f).is_file()])
-                    self._total_files_counted = True
-                    self._current_total = total_files
-                    self.root.after(0, lambda t=total_files: self._update_progress(0, t))
-                    print(f"Found {total_files} audio files to process")
-                else:
-                    total_files = getattr(self, '_current_total', 0)
+                # Use the total files count that was calculated at the start
+                total_files = self._current_total
                 
                 # Process files in this folder
                 current_index = len(all_filename_changes)
+                # Update current index before processing
+                self._current_index = current_index
                 folder_changes = self.process_folder(folder, metadata_sub, total_files=total_files, current_index=current_index)
                 all_filename_changes.extend(folder_changes)
+                # Update current index after processing
+                self._current_index = len(all_filename_changes)
+                # Update progress bar to final count for this folder
+                if total_files:
+                    final_idx = len(all_filename_changes)
+                    self.root.after(0, lambda idx=final_idx, tot=total_files: self._update_progress(idx, tot))
             
             # Update Virtual DJ database if enabled
             if self.link_database.get() and all_filename_changes:
@@ -1291,6 +1304,11 @@ class ToolGUI:
                     print("=" * 80 + "\n")
             
             print("\n\n >>> Finished processing all folders! <<< \n\n\n")
+            
+            # Update progress bar to 100% when done
+            if hasattr(self, '_current_total') and self._current_total > 0:
+                final_total = self._current_total
+                self.root.after(0, lambda t=final_total: self._update_progress(t, t))
             
         except Exception as e:
             if sys.stdout != ConsoleRedirect(self.console):
@@ -1331,10 +1349,12 @@ class ToolGUI:
             # Update progress before processing
             file_index += 1
             if total_files:
-                # Use a closure to capture current values correctly
-                def update_prog(idx=file_index, total=total_files):
-                    self._update_progress(idx, total)
-                self.root.after(0, update_prog)
+                # Update the current index and update progress bar
+                self._current_index = file_index
+                # Use a closure with default arguments to capture current values correctly
+                current_idx = file_index
+                current_total = total_files
+                self.root.after(0, lambda idx=current_idx, tot=current_total: self._update_progress(idx, tot))
             
             # Store original file location for output structure preservation
             original_file_location = audio_file
@@ -1550,14 +1570,20 @@ class ToolGUI:
     
     def _update_progress(self, current, total):
         """Update progress bar and counter"""
-        if total > 0:
-            self.progress_bar['maximum'] = total
-            self.progress_bar['value'] = current
-            self.progress_counter.config(text=f"{current}/{total}")
-        else:
-            self.progress_bar['value'] = 0
-            self.progress_bar['maximum'] = 100
-            self.progress_counter.config(text="0/0")
+        try:
+            if total > 0:
+                self.progress_bar['maximum'] = total
+                self.progress_bar['value'] = current
+                self.progress_counter.config(text=f"{current}/{total}")
+            else:
+                self.progress_bar['value'] = 0
+                self.progress_bar['maximum'] = 100
+                self.progress_counter.config(text="0/0")
+            # Force GUI update (safe to call from main thread)
+            self.root.update_idletasks()
+        except Exception:
+            # Silently handle any GUI update errors (might happen if window is closed)
+            pass
     
     def undo_last_operation(self):
         """Undo the last file operation - delete updated file and restore original, then re-run matching"""
