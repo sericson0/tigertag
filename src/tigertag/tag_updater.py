@@ -123,6 +123,10 @@ class MetaData:
         musicians = str(musicians).strip()
         if not musicians:
             return ""
+        
+        # Normalize default instrument name for comparison (handle plural forms)
+        default_normalized = default.lower().rstrip('s')  # Remove trailing 's' for comparison
+        
         # Split by comma and process each player
         for player in musicians.split(","):
             # Strip whitespace from each player entry
@@ -137,18 +141,37 @@ class MetaData:
                 end = player.rfind(")")
                 if start < end:
                     instrument = player[start+1:end].strip()
-                    instrument = instrument.capitalize()
-                    other_instruments[instrument] = other_instruments.get(instrument, 0) + 1
+                    # Normalize instrument name (remove plural 's' for comparison)
+                    instrument_normalized = instrument.lower().rstrip('s')
+                    # If the instrument matches the default (case-insensitive, ignoring plural), count as default
+                    if instrument_normalized == default_normalized:
+                        default_count += 1
+                    else:
+                        # Capitalize properly for display
+                        instrument = instrument.capitalize()
+                        other_instruments[instrument] = other_instruments.get(instrument, 0) + 1
             else:
                 # Count as default instrument (e.g., Bandoneon or Violin)
                 default_count += 1
+        
+        # Format default instrument count
         if default_count == 1:
             lineup += f"{default}, "
         elif default_count > 1:
-            lineup += f"{default_count} {default}s, "
+            # Handle pluralization - "Bandoneon" plural is "Bandoneons"
+            if default.lower() == "bandoneon":
+                lineup += f"{default_count} Bandoneons, "
+            else:
+                lineup += f"{default_count} {default}s, "
+        
+        # Format other instruments
         for instrument, count in other_instruments.items():
             if count > 1:
-                lineup += f"{count} {instrument}s, "
+                # Handle pluralization for bandoneon
+                if instrument.lower() == "bandoneon":
+                    lineup += f"{count} Bandoneons, "
+                else:
+                    lineup += f"{count} {instrument}s, "
             else:
                 lineup += f"{instrument}, "
         return lineup
