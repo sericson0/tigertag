@@ -297,3 +297,105 @@ def parse_years_from_folder(folder_path):
         end_year = start_year
     
     return start_year, end_year
+
+
+def extract_artist_names_from_folder(folder_path: Path) -> set:
+    """
+    Extract potential artist names from folder and subfolder names.
+    
+    Parameters:
+    -----------
+    folder_path : Path
+        Path to folder to scan
+    
+    Returns:
+    --------
+    set : Set of potential artist names (normalized)
+    """
+    artist_names = set()
+    
+    if not folder_path.exists() or not folder_path.is_dir():
+        return artist_names
+    
+    # Add the folder name itself (normalized)
+    folder_name = folder_path.name
+    if folder_name:
+        artist_names.add(strip_accents(folder_name))
+    
+    # Scan subfolders
+    try:
+        for item in folder_path.iterdir():
+            if item.is_dir():
+                subfolder_name = item.name
+                if subfolder_name:
+                    artist_names.add(strip_accents(subfolder_name))
+    except PermissionError:
+        pass
+    
+    return artist_names
+
+
+def extract_artist_from_file_tags(file_path: Path) -> str:
+    """
+    Extract artist name from file metadata tags.
+    
+    Parameters:
+    -----------
+    file_path : Path
+        Path to audio file
+    
+    Returns:
+    --------
+    str : Artist name (normalized) or empty string
+    """
+    try:
+        from mutagen import File as MutagenFile
+        audio = MutagenFile(str(file_path), easy=True)
+        if audio and audio.tags:
+            artist = audio.tags.get('artist', [''])[0]
+            if artist:
+                return strip_accents(artist)
+    except Exception:
+        pass
+    return ""
+
+
+def fuzzy_match_artists(candidate_names: set, available_artists: list, threshold: int = 70) -> list:
+    """
+    Fuzzy match candidate artist names against available artists in metadata.
+    
+    Parameters:
+    -----------
+    candidate_names : set
+        Set of normalized candidate artist names
+    available_artists : list
+        List of available artist names from metadata
+    threshold : int
+        Minimum fuzzy match score (0-100)
+    
+    Returns:
+    --------
+    list : List of matched artist names
+    """
+    from rapidfuzz import fuzz, process
+    
+    matched_artists = []
+    
+    for candidate in candidate_names:
+        if not candidate:
+            continue
+        
+        # Try to find matches
+        results = process.extract(
+            candidate,
+            available_artists,
+            scorer=fuzz.token_sort_ratio,
+            limit=5
+        )
+        
+        # Add artists that meet the threshold
+        for match_name, score, _ in results:
+            if score >= threshold and match_name not in matched_artists:
+                matched_artists.append(match_name)
+    
+    return matched_artists

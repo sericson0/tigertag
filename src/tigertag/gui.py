@@ -1,5 +1,11 @@
 from metadata_handler import load_parquet_folder, csv_to_parquet
-from helper_functions import subset_entries, parse_years_from_folder
+from helper_functions import (
+    subset_entries, 
+    parse_years_from_folder,
+    extract_artist_names_from_folder,
+    extract_artist_from_file_tags,
+    fuzzy_match_artists
+)
 import tag_updater
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext
@@ -749,6 +755,7 @@ class ToolGUI:
         
         # Variables
         self.folder_path = tk.StringVar()
+        self.folder_paths = []  # List of folder paths for multiple folder processing
         self.start_year = tk.StringVar(value="1900")
         self.end_year = tk.StringVar(value="2050")
         self.filename_format = tk.StringVar(value="orchestra last - title - singer last - year")  # Default format
@@ -770,6 +777,7 @@ class ToolGUI:
         
         # Output folder for processed audio files
         self.output_folder_path = tk.StringVar()
+        self.output_structure = tk.StringVar(value="preserve")  # "preserve" or "by_artist"
         
         # Load saved config
         self.load_vdj_config()
@@ -906,6 +914,23 @@ class ToolGUI:
         ttk.Entry(folder_frame, textvariable=self.output_folder_path, width=25).grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 5))
         ttk.Button(folder_frame, text="Browse", command=self.browse_output_folder).grid(row=0, column=4)
         
+        # Output structure option
+        ttk.Label(folder_frame, text="Structure:").grid(row=0, column=5, padx=(10, 5))
+        structure_dropdown = ttk.Combobox(
+            folder_frame,
+            textvariable=self.output_structure,
+            values=["Preserve Subfolders", "By Artist"],
+            state="readonly",
+            width=15
+        )
+        structure_dropdown.grid(row=0, column=6, padx=(0, 5))
+        
+        # Multiple folders button
+        ttk.Button(folder_frame, text="Add Folders", command=self.browse_multiple_folders).grid(row=0, column=7, padx=(0, 5))
+        
+        # Folder list display
+        self.folder_listbox = None  # Will be created if needed
+        
         # Start year and End year in main area (row 2)
         ttk.Label(main_frame, text="Start Year:").grid(row=2, column=0, sticky=tk.W, pady=5)
         year_frame = ttk.Frame(main_frame)
@@ -1015,6 +1040,7 @@ class ToolGUI:
         folder = filedialog.askdirectory()
         if folder:
             self.folder_path.set(folder)
+            self.folder_paths = [folder]  # Initialize with single folder
             
             # Try to extract years from folder name
             start_year, end_year = parse_years_from_folder(folder)
@@ -1022,6 +1048,18 @@ class ToolGUI:
             if start_year is not None:
                 self.start_year.set(str(start_year))
                 self.end_year.set(str(end_year))
+    
+    def browse_multiple_folders(self):
+        """Browse for multiple folders to process"""
+        folder = filedialog.askdirectory(mustexist=True, title="Add Folder to Process")
+        if folder:
+            if folder not in self.folder_paths:
+                self.folder_paths.append(folder)
+            # Update display
+            if len(self.folder_paths) > 1:
+                self.folder_path.set(f"{len(self.folder_paths)} folders selected")
+            else:
+                self.folder_path.set(folder)
             
     def submit_input(self):
         if self.waiting_for_input:
@@ -1048,24 +1086,28 @@ class ToolGUI:
         return self.input_result
     
     def run_tag_updater(self):
-        # Validate inputs
-        folder = self.folder_path.get()
-        if not folder:
-            self.console.insert(tk.END, "Error: Please select a folder\n")
+        # Get folders to process
+        folders_to_process = []
+        if self.folder_paths:
+            folders_to_process = self.folder_paths
+        else:
+            folder = self.folder_path.get()
+            if folder:
+                folders_to_process = [folder]
+        
+        if not folders_to_process:
+            self.console.insert(tk.END, "Error: Please select at least one folder\n")
             return
             
         try:
-            start = int(self.start_year.get())
-            end = int(self.end_year.get())
+            default_start = int(self.start_year.get())
+            default_end = int(self.end_year.get())
         except ValueError:
             self.console.insert(tk.END, "Error: Years must be valid integers\n")
             return
         
-        # Get selected artists
+        # Get selected artists (may be empty for fuzzy matching)
         selected_artists = self.artist_selector.get_selected_artists()
-        if not selected_artists:
-            self.console.insert(tk.END, "Error: Please select at least one artist\n")
-            return
             
         # Clear console and add initial padding
         self.console.delete(1.0, tk.END)
@@ -1076,227 +1118,116 @@ class ToolGUI:
         self.run_button.config(state='disabled')
         
         # Run in separate thread to keep GUI responsive
-        thread = threading.Thread(target=self.execute_tag_updater, args=(folder, self.metadata_dict, start, end, selected_artists))
+        thread = threading.Thread(
+            target=self.execute_tag_updater, 
+            args=(folders_to_process, self.metadata_dict, default_start, default_end, selected_artists)
+        )
         thread.daemon = True
         thread.start()
         
-    def execute_tag_updater(self, folder, metadata_dict, start_year, end_year, selected_artists):
+    def execute_tag_updater(self, folders, metadata_dict, default_start_year, default_end_year, selected_artists):
         # Redirect stdout to console
         old_stdout = sys.stdout
         old_input = __builtins__.input
         
         try:
-            # Create metadata subset
-            metadata_sub = subset_entries(
-                df = pd.concat([metadata_dict[artist] for artist in selected_artists]),
-                start_year = start_year,
-                end_year=end_year,
-            )
-            
             # Redirect after creating the data
             sys.stdout = ConsoleRedirect(self.console)
             __builtins__.input = self.custom_input
             
-            # Create a wrapper for update_tags that notifies about current file
-            def update_tags_with_player(audio_folder, catalogue):
-                """Wrapper that updates the player with current file"""
-                filename_changes = []
-                
-                for file in os.listdir(audio_folder):
-                    if not file.endswith(('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')):
-                        continue
-                    
-                    audio_file = Path(audio_folder, file)
-                    
-                    # Update player with current file
-                    self.root.after(0, lambda: self.music_player.load_file(str(audio_file)))
-                    self.current_audio_file = audio_file
-                    
-                    audio_metadata = tag_updater.get_audio_metadata(audio_file)
-                    chosen_idx = tag_updater.ask_choice(file, audio_metadata, catalogue)
-                    
-                    if chosen_idx != 9999:
-                        new_metadata = tag_updater.get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
-                        try:
-                            old_filename = audio_file.name
-                            old_path_resolved = audio_file.resolve()
-                            
-                            # Unload file from player before any file operations
-                            self.root.after(0, lambda: self.music_player.unload_file())
-                            # Wait longer to ensure file is fully released
-                            import time
-                            time.sleep(0.3)  # Increased delay
-                            
-                            # First rename the file
-                            new_path = tag_updater.update_filename(
-                                audio_file, 
-                                new_metadata.title,
-                                new_metadata.orchestra,
-                                new_metadata.year,
-                                format_type=self.filename_format.get(),
-                                orchestra_last_name=new_metadata.orchestra_last_name,
-                                singer_last_name=new_metadata.singer_last_name,
-                                )
-                            new_filename = new_path.name
-                            new_path_resolved = new_path.resolve()
-                            
-                            if old_path_resolved != new_path_resolved:
-                                filename_changes.append((old_filename, new_filename))
-                            
-                            # Check if any audio processing options are enabled
-                            process_audio = (
-                                self.convert_aflac_to_flac.get() or
-                                self.convert_to_mono.get() or
-                                self.convert_to_48khz.get() or
-                                self.use_24bit.get() or
-                                self.normalize_audio.get()
-                            )
-                            
-                            # Process audio file if any options are enabled
-                            if process_audio:
-                                # Ensure file is not loaded in player before processing
-                                self.root.after(0, lambda: self.music_player.unload_file())
-                                time.sleep(0.3)  # Wait to ensure file is fully released
-                                
-                                # Get output folder path
-                                output_folder = self.output_folder_path.get().strip()
-                                
-                                # Determine output path
-                                if output_folder:
-                                    # Create output folder if it doesn't exist
-                                    output_folder_path = Path(output_folder)
-                                    output_folder_path.mkdir(parents=True, exist_ok=True)
-                                    
-                                    # Determine output file path in output folder
-                                    # Handle AFLAC to FLAC conversion in filename
-                                    output_filename = new_filename
-                                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
-                                        output_filename = new_path.stem + '.flac'
-                                    
-                                    output_path = output_folder_path / output_filename
-                                    
-                                    print(f"\nProcessing audio file: {new_filename}")
-                                    print(f"Output will be saved to: {output_path}")
-                                else:
-                                    # No output folder specified, process in place
-                                    output_path = new_path
-                                    print(f"\nProcessing audio file in place: {new_filename}")
-                                
-                                try:
-                                    # Get AUFS target value
-                                    try:
-                                        aufs_target_value = float(self.aufs_target.get())
-                                    except (ValueError, TypeError):
-                                        aufs_target_value = -13.0  # Default if invalid
-                                        print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
-                                    
-                                    # Process audio file
-                                    success = process_audio_file(
-                                        input_path=new_path,
-                                        output_path=output_path,
-                                        target_lufs=aufs_target_value,
-                                        convert_to_flac=self.convert_aflac_to_flac.get(),
-                                        convert_to_mono=self.convert_to_mono.get(),
-                                        convert_to_48khz=self.convert_to_48khz.get(),
-                                        use_24bit=self.use_24bit.get(),
-                                        normalize=self.normalize_audio.get()
-                                    )
-                                    if success:
-                                        print(f"✓ Audio processing completed for: {new_filename}\n")
-                                        
-                                        # Update path references if output folder was used
-                                        if output_folder and output_path.exists():
-                                            new_path = output_path
-                                            new_filename = output_path.name
-                                            new_path_resolved = output_path.resolve()
-                                            
-                                            # Update filename changes to reflect output location
-                                            # Find and update the entry in filename_changes
-                                            for i, (old, new) in enumerate(filename_changes):
-                                                if new == new_filename or (self.convert_aflac_to_flac.get() and new.endswith('.aflac') and new_filename.endswith('.flac')):
-                                                    filename_changes[i] = (old, new_filename)
-                                                    break
-                                    else:
-                                        print(f"⚠ Audio processing failed for: {new_filename}\n")
-                                except Exception as audio_error:
-                                    print(f"Error processing audio for {new_filename}: {str(audio_error)}")
-                                    import traceback
-                                    traceback.print_exc()
-                                
-                                # Update path if extension changed (e.g., AFLAC to FLAC) and no output folder
-                                # The batch_audio_processor handles the conversion and file deletion
-                                if not output_folder and self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
-                                    # Check if file with .flac extension exists (processor created it)
-                                    flac_path = new_path.with_suffix('.flac')
-                                    if flac_path.exists():
-                                        new_path = flac_path
-                                        new_filename = new_path.name
-                                        new_path_resolved = new_path.resolve()
-                                        # Update filename changes if needed
-                                        if old_path_resolved != new_path_resolved:
-                                            # Find and update the entry in filename_changes
-                                            for i, (old, new) in enumerate(filename_changes):
-                                                if new.endswith('.aflac'):
-                                                    filename_changes[i] = (old, new_path.name)
-                                                    break
-                            
-                            # Ensure file is not loaded in player before writing metadata
-                            self.root.after(0, lambda: self.music_player.unload_file())
-                            time.sleep(0.2)  # Additional delay before metadata write
-                            
-                            # Write metadata to the file (use new_path which may point to output folder)
-                            try:
-                                tag_updater.write_metadata(new_path, new_metadata)
-                                print(f"Updated metadata for: {new_filename}")
-                            except PermissionError as pe:
-                                print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
-                                print("File may still be locked. Retrying after delay...")
-                                time.sleep(0.5)
-                                tag_updater.write_metadata(new_path, new_metadata)
-                                print(f"Successfully updated metadata for: {new_filename} on retry")
-                            except Exception as meta_error:
-                                print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
-                                import traceback
-                                traceback.print_exc()
-                            
-                            # Update player with new path AFTER metadata is written
-                            if old_path_resolved != new_path_resolved:
-                                self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p)))
-                            
-                        except Exception as e:
-                            print(f"Error processing {file}: {str(e)}")
-                            import traceback
-                            traceback.print_exc()
-                            continue
-                
-                tag_updater.print_filename_changes_table(filename_changes)
-                
-                # Update Virtual DJ database if enabled
-                if self.link_database.get() and filename_changes:
-                    vdj_path = self.vdj_database_path.get()
-                    if vdj_path and Path(vdj_path).exists():
-                        print("\n" + "=" * 80)
-                        print("Updating Virtual DJ Database...")
-                        print("=" * 80)
-                        updated_count, error = vdj_updater.update_vdj_database(
-                            vdj_path,
-                            filename_changes,
-                            folder
-                        )
-                        if error:
-                            print(f"Error: {error}")
-                        else:
-                            print(f"Successfully updated {updated_count} entries in Virtual DJ database.")
-                        print("=" * 80 + "\n")
-                    elif vdj_path:
-                        print(f"\nWarning: Virtual DJ database file not found: {vdj_path}")
-                        print("Skipping database update.\n")
-                
-                print("\n\n >>> Finished updating folder! <<< \n\n\n")
+            # Process each folder
+            all_filename_changes = []
             
-            # Run the tag updater with player integration
-            update_tags_with_player(folder, metadata_sub)
-        
+            for folder_path in folders:
+                folder = Path(folder_path)
+                if not folder.exists() or not folder.is_dir():
+                    print(f"Warning: Skipping invalid folder: {folder_path}")
+                    continue
+                
+                print(f"\n{'='*80}")
+                print(f"Processing folder: {folder}")
+                print(f"{'='*80}\n")
+                
+                # Detect years from folder name
+                folder_start_year, folder_end_year = parse_years_from_folder(folder)
+                if folder_start_year is None:
+                    folder_start_year = default_start_year
+                    folder_end_year = default_end_year
+                    print(f"Using default years: {folder_start_year}-{folder_end_year}")
+                else:
+                    print(f"Detected years from folder: {folder_start_year}-{folder_end_year}")
+                
+                # Determine artists for this folder
+                folder_artists = selected_artists.copy() if selected_artists else []
+                
+                # If no artists selected, do fuzzy matching
+                if not folder_artists:
+                    print("No artists selected, performing fuzzy matching...")
+                    
+                    # Extract artist names from folder structure
+                    candidate_names = extract_artist_names_from_folder(folder)
+                    
+                    # Extract artist names from file tags
+                    audio_extensions = ('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')
+                    for audio_file in folder.rglob('*'):
+                        if audio_file.is_file() and audio_file.suffix.lower() in audio_extensions:
+                            try:
+                                tagged_artist = extract_artist_from_file_tags(audio_file)
+                                if tagged_artist:
+                                    candidate_names.add(tagged_artist)
+                            except:
+                                pass
+                    
+                    # Fuzzy match against available artists
+                    available_artists = list(metadata_dict.keys())
+                    if candidate_names:
+                        folder_artists = fuzzy_match_artists(candidate_names, available_artists, threshold=70)
+                        if folder_artists:
+                            print(f"Fuzzy matched artists: {', '.join(folder_artists)}")
+                        else:
+                            print("Warning: No artists matched via fuzzy matching. Using all artists.")
+                            folder_artists = available_artists
+                    else:
+                        print("Warning: No candidate artist names found. Using all artists.")
+                        folder_artists = available_artists
+                
+                # Create metadata subset for this folder
+                if folder_artists:
+                    metadata_sub = subset_entries(
+                        df=pd.concat([metadata_dict[artist] for artist in folder_artists]),
+                        start_year=folder_start_year,
+                        end_year=folder_end_year,
+                    )
+                else:
+                    print("Warning: No artists available. Skipping folder.")
+                    continue
+                
+                # Process files in this folder
+                folder_changes = self.process_folder(folder, metadata_sub)
+                all_filename_changes.extend(folder_changes)
+            
+            # Update Virtual DJ database if enabled
+            if self.link_database.get() and all_filename_changes:
+                vdj_path = self.vdj_database_path.get()
+                if vdj_path and Path(vdj_path).exists():
+                    print("\n" + "=" * 80)
+                    print("Updating Virtual DJ Database...")
+                    print("=" * 80)
+                    # Note: vdj_updater.update_vdj_database may need to be updated for multiple folders
+                    # For now, we'll pass the first folder as reference
+                    updated_count, error = vdj_updater.update_vdj_database(
+                        vdj_path,
+                        all_filename_changes,
+                        folders[0] if folders else ""
+                    )
+                    if error:
+                        print(f"Error: {error}")
+                    else:
+                        print(f"Successfully updated {updated_count} entries in Virtual DJ database.")
+                    print("=" * 80 + "\n")
+            
+            print("\n\n >>> Finished processing all folders! <<< \n\n\n")
+            
         except Exception as e:
             if sys.stdout != ConsoleRedirect(self.console):
                 sys.stdout = ConsoleRedirect(self.console)
@@ -1311,6 +1242,192 @@ class ToolGUI:
                 self.root.after(0, lambda: self.run_button.config(state='normal'))
             except:
                 pass
+    
+    def process_folder(self, audio_folder, catalogue):
+        """Process a single folder (including subfolders) and return filename changes"""
+        filename_changes = []
+        audio_extensions = ('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')
+        
+        # Get all audio files recursively
+        audio_files = []
+        for ext in audio_extensions:
+            audio_files.extend(list(audio_folder.rglob(f'*{ext}')))
+            audio_files.extend(list(audio_folder.rglob(f'*{ext.upper()}')))
+        
+        # Remove duplicates (case-insensitive filesystems)
+        audio_files = list(set([f.resolve() for f in audio_files]))
+        audio_files.sort()
+        
+        for audio_file in audio_files:
+            if not audio_file.is_file():
+                continue
+            
+            # Store original file location for output structure preservation
+            original_file_location = audio_file
+            
+            # Update player with current file
+            self.root.after(0, lambda f=audio_file: self.music_player.load_file(str(f)))
+            self.current_audio_file = audio_file
+            
+            audio_metadata = tag_updater.get_audio_metadata(audio_file)
+            chosen_idx = tag_updater.ask_choice(audio_file.name, audio_metadata, catalogue)
+            
+            if chosen_idx != 9999:
+                new_metadata = tag_updater.get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
+                try:
+                    old_filename = audio_file.name
+                    old_path_resolved = audio_file.resolve()
+                    
+                    # Unload file from player before any file operations
+                    self.root.after(0, lambda: self.music_player.unload_file())
+                    import time
+                    time.sleep(0.3)
+                    
+                    # First rename the file
+                    new_path = tag_updater.update_filename(
+                        audio_file, 
+                        new_metadata.title,
+                        new_metadata.orchestra,
+                        new_metadata.year,
+                        format_type=self.filename_format.get(),
+                        orchestra_last_name=new_metadata.orchestra_last_name,
+                        singer_last_name=new_metadata.singer_last_name,
+                    )
+                    new_filename = new_path.name
+                    new_path_resolved = new_path.resolve()
+                    
+                    if old_path_resolved != new_path_resolved:
+                        filename_changes.append((old_filename, new_filename))
+                    
+                    # Check if any audio processing options are enabled
+                    process_audio = (
+                        self.convert_aflac_to_flac.get() or
+                        self.convert_to_mono.get() or
+                        self.convert_to_48khz.get() or
+                        self.use_24bit.get() or
+                        self.normalize_audio.get()
+                    )
+                    
+                    # Process audio file if any options are enabled
+                    if process_audio:
+                        self.root.after(0, lambda: self.music_player.unload_file())
+                        time.sleep(0.3)
+                        
+                        # Get output folder path
+                        output_folder = self.output_folder_path.get().strip()
+                        
+                        # Determine output path based on structure option
+                        if output_folder:
+                            output_folder_path = Path(output_folder)
+                            output_folder_path.mkdir(parents=True, exist_ok=True)
+                            
+                            # Determine output structure
+                            structure = self.output_structure.get()
+                            
+                            # Handle AFLAC to FLAC conversion in filename
+                            output_filename = new_filename
+                            if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                                output_filename = new_path.stem + '.flac'
+                            
+                            if structure == "By Artist":
+                                # Create folder by artist name (orchestra)
+                                artist_folder = output_folder_path / new_metadata.orchestra
+                                artist_folder.mkdir(parents=True, exist_ok=True)
+                                output_path = artist_folder / output_filename
+                            else:
+                                # Preserve subfolder structure
+                                # Calculate relative path from the root folder being processed
+                                try:
+                                    # Get relative path from the original file location to the root folder
+                                    relative_to_root = original_file_location.relative_to(audio_folder)
+                                    # Preserve directory structure in output (use parent directory of relative path)
+                                    output_path = output_folder_path / relative_to_root.parent / output_filename
+                                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                                except (ValueError, AttributeError):
+                                    # If relative path calculation fails, just use filename
+                                    output_path = output_folder_path / output_filename
+                            
+                            print(f"\nProcessing audio file: {new_filename}")
+                            print(f"Output will be saved to: {output_path}")
+                        else:
+                            output_path = new_path
+                            print(f"\nProcessing audio file in place: {new_filename}")
+                        
+                        try:
+                            try:
+                                aufs_target_value = float(self.aufs_target.get())
+                            except (ValueError, TypeError):
+                                aufs_target_value = -13.0
+                                print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
+                            
+                            success = process_audio_file(
+                                input_path=new_path,
+                                output_path=output_path,
+                                target_lufs=aufs_target_value,
+                                convert_to_flac=self.convert_aflac_to_flac.get(),
+                                convert_to_mono=self.convert_to_mono.get(),
+                                convert_to_48khz=self.convert_to_48khz.get(),
+                                use_24bit=self.use_24bit.get(),
+                                normalize=self.normalize_audio.get()
+                            )
+                            if success:
+                                print(f"✓ Audio processing completed for: {new_filename}\n")
+                                if output_folder and output_path.exists():
+                                    new_path = output_path
+                                    new_filename = output_path.name
+                                    new_path_resolved = output_path.resolve()
+                                    for i, (old, new) in enumerate(filename_changes):
+                                        if new == new_filename or (self.convert_aflac_to_flac.get() and new.endswith('.aflac') and new_filename.endswith('.flac')):
+                                            filename_changes[i] = (old, new_filename)
+                                            break
+                            else:
+                                print(f"⚠ Audio processing failed for: {new_filename}\n")
+                        except Exception as audio_error:
+                            print(f"Error processing audio for {new_filename}: {str(audio_error)}")
+                            import traceback
+                            traceback.print_exc()
+                        
+                        if not output_folder and self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                            flac_path = new_path.with_suffix('.flac')
+                            if flac_path.exists():
+                                new_path = flac_path
+                                new_filename = new_path.name
+                                new_path_resolved = new_path.resolve()
+                                if old_path_resolved != new_path_resolved:
+                                    for i, (old, new) in enumerate(filename_changes):
+                                        if new.endswith('.aflac'):
+                                            filename_changes[i] = (old, new_path.name)
+                                            break
+                    
+                    # Write metadata
+                    self.root.after(0, lambda: self.music_player.unload_file())
+                    time.sleep(0.2)
+                    
+                    try:
+                        tag_updater.write_metadata(new_path, new_metadata)
+                        print(f"Updated metadata for: {new_filename}")
+                    except PermissionError as pe:
+                        print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
+                        print("File may still be locked. Retrying after delay...")
+                        time.sleep(0.5)
+                        tag_updater.write_metadata(new_path, new_metadata)
+                        print(f"Successfully updated metadata for: {new_filename} on retry")
+                    except Exception as meta_error:
+                        print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
+                        import traceback
+                        traceback.print_exc()
+                    
+                    if old_path_resolved != new_path_resolved:
+                        self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p)))
+                    
+                except Exception as e:
+                    print(f"Error processing {audio_file.name}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+        
+        tag_updater.print_filename_changes_table(filename_changes)
+        return filename_changes
 
 if __name__ == "__main__":
     root = tk.Tk()

@@ -72,13 +72,15 @@ class MetaData:
         return comment
     def _get_lineup(self):
         lineup = ""
-        if self.bandoneons != "":
-            lineup += self._count_instruments(musicians = self.bandoneons, default = "Bandoneon")
-        if self.strings != "":
-            lineup += self._count_instruments(musicians = self.strings, default = "Violin")
-        if self.pianist != "": 
+        # Check if bandoneons is not empty and is a string (handle NaN/None)
+        if self.bandoneons and str(self.bandoneons).strip() != "" and not (isinstance(self.bandoneons, float) and pd.isna(self.bandoneons)):
+            lineup += self._count_instruments(musicians = str(self.bandoneons), default = "Bandoneon")
+        # Check if strings is not empty and is a string (handle NaN/None)
+        if self.strings and str(self.strings).strip() != "" and not (isinstance(self.strings, float) and pd.isna(self.strings)):
+            lineup += self._count_instruments(musicians = str(self.strings), default = "Violin")
+        if self.pianist and str(self.pianist).strip() != "" and not (isinstance(self.pianist, float) and pd.isna(self.pianist)): 
             lineup += f"Piano, "
-        if self.bassist != "":
+        if self.bassist and str(self.bassist).strip() != "" and not (isinstance(self.bassist, float) and pd.isna(self.bassist)):
             lineup += f"Bass"
         return lineup
 
@@ -86,6 +88,13 @@ class MetaData:
         other_instruments = {}
         default_count = 0
         lineup = ""
+        # Handle case where musicians might be NaN, None, or not a string
+        if musicians is None or (isinstance(musicians, float) and pd.isna(musicians)):
+            return ""
+        # Convert to string if it's not already
+        musicians = str(musicians).strip()
+        if not musicians:
+            return ""
         for player in musicians.split(","):
             # Check if player has instrument in parentheses
             if "(" in player and ")" in player:
@@ -421,14 +430,11 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
     print(f"  Album: {audio_metadata.get('album', 'N/A')}")
     print("=" * 80)
     
-    # If only one candidate, use it automatically
+    # Display all candidates (always show them, even if only one, to allow custom input)
     if len(candidate_indices) == 1:
-        # print("\n>>> Only one candidate found - using it automatically <<<")
-        # print("_"*80, "\n"*5)
-        return candidate_indices[0]
-    
-    # Display all candidates
-    # print(f"\nFOUND {len(candidate_indices)} POSSIBLE MATCHES:\n")
+        print(f"\nFOUND 1 MATCH:\n")
+    else:
+        print(f"\nFOUND {len(candidate_indices)} POSSIBLE MATCHES:\n")
     
     for n, idx in enumerate(candidate_indices, 1):
         row = catalogue.loc[idx]
@@ -448,8 +454,84 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
     
     # Get user choice
     while True:
-        choice = input("\nPick a number (or 0 to skip):\n\n\n")
+        choice = input("\nPick a number (or 0 to skip, or 't' to type custom title):\n\n\n")
         
+        # Handle custom title input
+        if choice.lower() == 't' or choice.lower() == 'type':
+            print("_" * 80, "\n")
+            input_title = input(f"Type custom title to search for:\n\n\n")
+            if input_title.strip():
+                # Search for the custom title
+                custom_candidates = find_candidate_rows(input_title, catalogue, threshold=30)
+                if custom_candidates:
+                    # Display custom candidates
+                    print("\n" + "=" * 80)
+                    print(f"CUSTOM SEARCH RESULTS FOR: {input_title}")
+                    print("=" * 80)
+                    for n, idx in enumerate(custom_candidates, 1):
+                        row = catalogue.loc[idx]
+                        title = row.get('Title', 'N/A')
+                        artist = row.get('Orchestra', 'N/A')
+                        singer = row.get('Singer', 'N/A')
+                        date = row.get('Date', 'N/A')
+                        print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")
+                        if n < len(custom_candidates):
+                            print("      " + "-" * 70)
+                    print("_" * 80)
+                    
+                    # Get choice from custom candidates
+                    while True:
+                        custom_choice = input("\nPick a number from custom results (or 0 to go back):\n\n\n")
+                        if custom_choice.isdigit():
+                            i = int(custom_choice)
+                            if i == 0:
+                                # Go back to original candidates
+                                break
+                            if 1 <= i <= len(custom_candidates):
+                                print(f">>> Selected custom option {i} <<<\n")
+                                return custom_candidates[i - 1]
+                        print("Invalid choice. Please try again.")
+                    # Continue to show original candidates again
+                    print("\n" + "=" * 80)
+                    print(f"MATCHING FILE: {file}")
+                    print(f"  Title: {audio_metadata.get('title', 'N/A')}")
+                    print(f"  Date:  {audio_metadata.get('date', 'N/A')}")
+                    print(f"  Album: {audio_metadata.get('album', 'N/A')}")
+                    print("=" * 80)
+                    for n, idx in enumerate(candidate_indices, 1):
+                        row = catalogue.loc[idx]
+                        title = row.get('Title', 'N/A')
+                        artist = row.get('Orchestra', 'N/A')
+                        singer = row.get('Singer', 'N/A')
+                        date = row.get('Date', 'N/A')
+                        print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")
+                        if n < len(candidate_indices):
+                            print("      " + "-" * 70)
+                    print("_" * 80)
+                    continue
+                else:
+                    print(f"No candidates found for '{input_title}'. Returning to original matches...")
+                    print("_" * 80)
+                    # Show original candidates again
+                    print("\n" + "=" * 80)
+                    print(f"MATCHING FILE: {file}")
+                    print(f"  Title: {audio_metadata.get('title', 'N/A')}")
+                    print(f"  Date:  {audio_metadata.get('date', 'N/A')}")
+                    print(f"  Album: {audio_metadata.get('album', 'N/A')}")
+                    print("=" * 80)
+                    for n, idx in enumerate(candidate_indices, 1):
+                        row = catalogue.loc[idx]
+                        title = row.get('Title', 'N/A')
+                        artist = row.get('Orchestra', 'N/A')
+                        singer = row.get('Singer', 'N/A')
+                        date = row.get('Date', 'N/A')
+                        print(f"  [{n}]  {title[:25]:<25}  | {singer[:25]:<25} | {artist[:25]:<25}  |  {date}")
+                        if n < len(candidate_indices):
+                            print("      " + "-" * 70)
+                    print("_" * 80)
+                    continue
+        
+        # Handle numeric choices
         if choice.isdigit():
             i = int(choice)
             if i == 0:
