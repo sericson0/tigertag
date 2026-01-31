@@ -789,6 +789,8 @@ class ToolGUI:
         self.enable_vst3 = tk.BooleanVar(value=False)
         self.vst3_plugins = []  # List of VST3 plugin paths
         self.vst3_parameters = []  # List of parameter dicts for each plugin
+        self.vst3_plugin_instances = []  # List of loaded plugin instances for parameter access
+        self.vst3_plugin_windows = {}  # Dict mapping plugin index to parameter editor window
         
         # Output folder for processed audio files
         self.output_folder_path = tk.StringVar()
@@ -1085,6 +1087,8 @@ class ToolGUI:
         ttk.Button(plugin_button_frame, text="Add Plugin", command=self.add_vst3_plugin).grid(row=0, column=0, padx=2)
         ttk.Button(plugin_button_frame, text="Remove Selected", command=self.remove_vst3_plugin).grid(row=0, column=1, padx=2)
         ttk.Button(plugin_button_frame, text="Clear All", command=self.clear_vst3_plugins).grid(row=0, column=2, padx=2)
+        ttk.Button(plugin_button_frame, text="Edit Plugin", command=self.edit_vst3_plugin).grid(row=0, column=3, padx=2)
+        ttk.Button(plugin_button_frame, text="Preview", command=self.preview_processed_audio).grid(row=0, column=4, padx=2)
         
         # Update listbox if plugins were loaded from config
         if hasattr(self, '_vst3_plugins_loaded') and self._vst3_plugins_loaded:
@@ -1353,14 +1357,31 @@ class ToolGUI:
         selection = self.vst3_listbox.curselection()
         if selection:
             index = selection[0]
+            # Close parameter window if open
+            if index in self.vst3_plugin_windows:
+                try:
+                    self.vst3_plugin_windows[index].destroy()
+                    del self.vst3_plugin_windows[index]
+                except:
+                    pass
             self.vst3_plugins.pop(index)
             self.vst3_parameters.pop(index)
+            if index < len(self.vst3_plugin_instances):
+                self.vst3_plugin_instances.pop(index)
             self.update_vst3_listbox()
     
     def clear_vst3_plugins(self):
         """Clear all VST3 plugins from the list."""
+        # Close all parameter windows
+        for window in list(self.vst3_plugin_windows.values()):
+            try:
+                window.destroy()
+            except:
+                pass
+        self.vst3_plugin_windows.clear()
         self.vst3_plugins.clear()
         self.vst3_parameters.clear()
+        self.vst3_plugin_instances.clear()
         self.update_vst3_listbox()
     
     def update_vst3_listbox(self):
@@ -1368,6 +1389,305 @@ class ToolGUI:
         self.vst3_listbox.delete(0, tk.END)
         for plugin_path in self.vst3_plugins:
             self.vst3_listbox.insert(tk.END, Path(plugin_path).name)
+    
+    def load_vst3_plugin_instance(self, plugin_path: str):
+        """Load a VST3 plugin instance for parameter access."""
+        try:
+            import pedalboard
+            from pedalboard import Plugin
+            
+            if not Path(plugin_path).exists():
+                return None
+            
+            plugin = Plugin(plugin_path)
+            return plugin
+        except Exception as e:
+            print(f"Error loading VST3 plugin {Path(plugin_path).name}: {e}")
+            return None
+    
+    def edit_vst3_plugin(self):
+        """Open a parameter editor window for the selected VST3 plugin."""
+        selection = self.vst3_listbox.curselection()
+        if not selection:
+            print("Please select a plugin to edit")
+            return
+        
+        index = selection[0]
+        plugin_path = self.vst3_plugins[index]
+        
+        # Close existing window for this plugin if open
+        if index in self.vst3_plugin_windows:
+            try:
+                self.vst3_plugin_windows[index].destroy()
+            except:
+                pass
+        
+        # Load plugin instance if not already loaded
+        if index >= len(self.vst3_plugin_instances) or self.vst3_plugin_instances[index] is None:
+            plugin_instance = self.load_vst3_plugin_instance(plugin_path)
+            if plugin_instance is None:
+                print(f"Failed to load plugin: {Path(plugin_path).name}")
+                return
+            # Extend list if needed
+            while len(self.vst3_plugin_instances) <= index:
+                self.vst3_plugin_instances.append(None)
+            self.vst3_plugin_instances[index] = plugin_instance
+        else:
+            plugin_instance = self.vst3_plugin_instances[index]
+        
+        # Create parameter editor window
+        param_window = tk.Toplevel(self.root)
+        param_window.title(f"Edit Parameters: {Path(plugin_path).name}")
+        param_window.geometry("500x600")
+        
+        # Store reference
+        self.vst3_plugin_windows[index] = param_window
+        
+        # Create scrollable frame for parameters
+        canvas = tk.Canvas(param_window)
+        scrollbar = ttk.Scrollbar(param_window, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Get plugin parameters
+        param_controls = {}
+        row = 0
+        try:
+            # Try to get parameters from pedalboard plugin
+            # Pedalboard plugins expose parameters through the 'parameters' attribute
+            if hasattr(plugin_instance, 'parameters'):
+                params_dict = plugin_instance.parameters
+                for param_name, param_obj in params_dict.items():
+                    try:
+                        # Get current value and range
+                        current_value = float(param_obj.raw_value)
+                        min_val = float(param_obj.min_value) if hasattr(param_obj, 'min_value') else 0.0
+                        max_val = float(param_obj.max_value) if hasattr(param_obj, 'max_value') else 1.0
+                        
+                        # Create label
+                        label_text = param_name.replace('_', ' ').title()
+                        ttk.Label(scrollable_frame, text=label_text + ":").grid(
+                            row=row, column=0, sticky=tk.W, padx=5, pady=2
+                        )
+                        
+                        # Create scale for parameter
+                        var = tk.DoubleVar(value=current_value)
+                        scale = ttk.Scale(
+                            scrollable_frame,
+                            from_=min_val,
+                            to=max_val,
+                            variable=var,
+                            orient=tk.HORIZONTAL,
+                            length=300
+                        )
+                        scale.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
+                        
+                        # Value label
+                        value_label = ttk.Label(scrollable_frame, text=f"{current_value:.3f}")
+                        value_label.grid(row=row, column=2, padx=5, pady=2)
+                        
+                        # Update callback
+                        def update_param(name=param_name, v=var, label=value_label, 
+                                       inst=plugin_instance, idx=index, param=param_obj):
+                            val = v.get()
+                            try:
+                                param.raw_value = val
+                                label.config(text=f"{val:.3f}")
+                                # Update saved parameters
+                                if idx < len(self.vst3_parameters):
+                                    if self.vst3_parameters[idx] is None:
+                                        self.vst3_parameters[idx] = {}
+                                    self.vst3_parameters[idx][name] = val
+                            except Exception as e:
+                                print(f"Error updating parameter {name}: {e}")
+                        
+                        def on_scale_change(val):
+                            var.set(float(val))
+                            update_param()
+                        
+                        scale.configure(command=on_scale_change)
+                        var.trace('w', lambda *args, u=update_param: u())
+                        
+                        param_controls[param_name] = (var, scale, value_label)
+                        row += 1
+                    except Exception as e:
+                        print(f"Error processing parameter {param_name}: {e}")
+                        continue
+            else:
+                # Fallback: try to access attributes directly
+                params = dir(plugin_instance)
+                for attr_name in params:
+                    if attr_name.startswith('_') or callable(getattr(plugin_instance, attr_name, None)):
+                        continue
+                    try:
+                        value = getattr(plugin_instance, attr_name)
+                        if isinstance(value, (int, float)):
+                            ttk.Label(scrollable_frame, text=attr_name.replace('_', ' ').title() + ":").grid(
+                                row=row, column=0, sticky=tk.W, padx=5, pady=2
+                            )
+                            var = tk.DoubleVar(value=float(value))
+                            scale = ttk.Scale(
+                                scrollable_frame,
+                                from_=0.0,
+                                to=1.0,
+                                variable=var,
+                                orient=tk.HORIZONTAL,
+                                length=300
+                            )
+                            scale.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
+                            value_label = ttk.Label(scrollable_frame, text=f"{value:.3f}")
+                            value_label.grid(row=row, column=2, padx=5, pady=2)
+                            
+                            def update_param(name=attr_name, v=var, label=value_label, 
+                                           inst=plugin_instance, idx=index):
+                                val = v.get()
+                                try:
+                                    setattr(inst, name, val)
+                                    label.config(text=f"{val:.3f}")
+                                    if idx < len(self.vst3_parameters):
+                                        if self.vst3_parameters[idx] is None:
+                                            self.vst3_parameters[idx] = {}
+                                        self.vst3_parameters[idx][name] = val
+                                except Exception as e:
+                                    print(f"Error updating parameter {name}: {e}")
+                            
+                            scale.configure(command=lambda v=var, l=value_label, u=update_param: 
+                                          (u(), l.config(text=f"{v.get():.3f}")))
+                            var.trace('w', lambda *args, u=update_param: u())
+                            row += 1
+                    except:
+                        continue
+            
+            if row == 0:
+                ttk.Label(scrollable_frame, text="No editable parameters found for this plugin").grid(
+                    row=0, column=0, columnspan=3, padx=5, pady=10
+                )
+        except Exception as e:
+            import traceback
+            error_msg = f"Error reading parameters: {e}\n{traceback.format_exc()}"
+            ttk.Label(scrollable_frame, text=error_msg, wraplength=450).grid(
+                row=0, column=0, columnspan=3, padx=5, pady=10
+            )
+        
+        # Close button
+        def on_close():
+            param_window.destroy()
+            if index in self.vst3_plugin_windows:
+                del self.vst3_plugin_windows[index]
+        
+        param_window.protocol("WM_DELETE_WINDOW", on_close)
+        
+        ttk.Button(scrollable_frame, text="Close", command=on_close).grid(
+            row=row+1, column=0, columnspan=3, pady=10
+        )
+    
+    def preview_processed_audio(self):
+        """Preview audio with current plugins and denoising settings applied."""
+        # Check if music player has a file loaded
+        if not hasattr(self, 'music_player') or not self.music_player.current_file:
+            print("Please load an audio file in the music player first")
+            return
+        
+        input_file = self.music_player.current_file
+        if not input_file.exists():
+            print(f"Audio file not found: {input_file}")
+            return
+        
+        print(f"Processing preview for: {input_file.name}")
+        print("This may take a moment...")
+        
+        # Process audio in a separate thread to avoid blocking GUI
+        import threading
+        def process_and_play():
+            try:
+                from pydub import AudioSegment
+                from pathlib import Path
+                import tempfile
+                
+                # Load audio
+                audio = AudioSegment.from_file(str(input_file))
+                
+                # Apply denoising if enabled
+                if self.enable_denoise.get():
+                    from batch_audio_processor import apply_denoising, detect_noise_level, find_noise_sample
+                    
+                    # Check noise level
+                    has_noise, noise_level = detect_noise_level(audio)
+                    noise_threshold_value = float(self.noise_threshold.get())
+                    
+                    if has_noise and noise_level > noise_threshold_value:
+                        # Find noise sample
+                        noise_sample = None
+                        if self.use_noise_sample.get():
+                            noise_sample = find_noise_sample(audio)
+                        
+                        # Get denoising parameters
+                        denoise_strength = self.denoise_strength.get()
+                        if denoise_strength == "light":
+                            prop_decrease = 0.3
+                            stationary = self.denoise_stationary.get()
+                        elif denoise_strength == "moderate":
+                            prop_decrease = float(self.prop_decrease.get())
+                            stationary = self.denoise_stationary.get()
+                        else:  # strong
+                            prop_decrease = 0.7
+                            stationary = False
+                        
+                        audio = apply_denoising(
+                            audio,
+                            strength=denoise_strength,
+                            noise_sample=noise_sample,
+                            stationary=stationary,
+                            prop_decrease=prop_decrease
+                        )
+                        print("  - Applied denoising")
+                
+                # Apply VST3 plugins if enabled
+                if self.enable_vst3.get() and self.vst3_plugins:
+                    from batch_audio_processor import apply_vst3_plugins
+                    # Use saved parameters, ensuring list is properly sized
+                    params = self.vst3_parameters if self.vst3_parameters else [{}] * len(self.vst3_plugins)
+                    # Ensure params list matches plugins list length
+                    while len(params) < len(self.vst3_plugins):
+                        params.append({})
+                    audio = apply_vst3_plugins(
+                        audio,
+                        self.vst3_plugins,
+                        params
+                    )
+                    print("  - Applied VST3 plugins")
+                
+                # Save to temporary file
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                temp_path = Path(temp_file.name)
+                temp_file.close()
+                
+                audio.export(str(temp_path), format='wav')
+                print(f"  - Preview file created: {temp_path.name}")
+                
+                # Load and play in music player
+                self.root.after(0, lambda: self.music_player.load_file(str(temp_path)))
+                self.root.after(0, lambda: self.music_player.toggle_play_pause())
+                
+                print("Preview ready - playing processed audio")
+                
+            except Exception as e:
+                print(f"Error creating preview: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        thread = threading.Thread(target=process_and_play, daemon=True)
+        thread.start()
     
     def browse_folder(self):
         folder = filedialog.askdirectory()
