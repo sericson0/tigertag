@@ -398,7 +398,7 @@ def remove_brackets(text: str) -> str:
     return text
 
 
-def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int | None:
+def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame, auto_select: bool = False) -> int | None:
     """Interactively ask the user to pick a row; return DataFrame index or None."""
     
     title = audio_metadata["title"]
@@ -430,6 +430,11 @@ def ask_choice(file: str, audio_metadata: dict, catalogue: pd.DataFrame) -> int 
     print(f"  Date:  {audio_metadata.get('date', 'N/A')}")
     print(f"  Album: {audio_metadata.get('album', 'N/A')}")
     print("=" * 80)
+    
+    # Auto-select if only one candidate and auto_select is enabled
+    if auto_select and len(candidate_indices) == 1:
+        print(f"\nFOUND 1 MATCH - Auto-selecting (auto-select enabled)\n")
+        return candidate_indices[0]
     
     # Display all candidates (always show them, even if only one, to allow custom input)
     if len(candidate_indices) == 1:

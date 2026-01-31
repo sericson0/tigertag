@@ -780,6 +780,9 @@ class ToolGUI:
         self.output_folder_path = tk.StringVar()
         self.output_structure = tk.StringVar(value="preserve")  # "preserve" or "by_artist"
         
+        # Auto-select option
+        self.auto_select = tk.BooleanVar(value=False)
+        
         # Undo history - stack of operations that can be undone
         self.undo_history = []  # List of dicts with: original_path, new_path, chosen_idx, catalogue, audio_folder
         
@@ -824,8 +827,15 @@ class ToolGUI:
         self.settings_dropdown.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
         self.settings_dropdown.title_label.config(text="Settings")
         
+        # Auto-select checkbox in settings dropdown
+        ttk.Checkbutton(
+            self.settings_dropdown.dropdown_frame,
+            text="Auto-select single match",
+            variable=self.auto_select
+        ).grid(row=0, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        
         # Filename format in settings dropdown
-        ttk.Label(self.settings_dropdown.dropdown_frame, text="Filename Format:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(self.settings_dropdown.dropdown_frame, text="Filename Format:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
         format_options = [
             "title - orchestra last - singer last - year",
             "title - orchestra last - year",
@@ -843,14 +853,14 @@ class ToolGUI:
             state="readonly",
             width=50
         )
-        format_dropdown.grid(row=0, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
+        format_dropdown.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
         
         # Update metadata button in settings dropdown
         ttk.Button(
             self.settings_dropdown.dropdown_frame,
             text="Update Metadata",
             command=self.update_metadata
-        ).grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=5, pady=5)
+        ).grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=5, pady=5)
         
         # Virtual DJ Database Linking in settings dropdown
         vdj_checkbox = ttk.Checkbutton(
@@ -859,11 +869,11 @@ class ToolGUI:
             variable=self.link_database,
             command=self.on_link_database_toggle
         )
-        vdj_checkbox.grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        vdj_checkbox.grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
         
         # Database path frame in settings dropdown
         db_path_frame = ttk.Frame(self.settings_dropdown.dropdown_frame)
-        db_path_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
+        db_path_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
         db_path_frame.columnconfigure(0, weight=1)
         
         ttk.Entry(db_path_frame, textvariable=self.vdj_database_path, state='readonly').grid(
@@ -968,19 +978,16 @@ class ToolGUI:
         self.undo_button = ttk.Button(run_button_frame, text="Undo Last", command=self.undo_last_operation, state='disabled')
         self.undo_button.grid(row=0, column=1, padx=(10, 0))
         
-        # Progress bar and counter (row 5.5)
-        progress_frame = ttk.Frame(main_frame)
-        progress_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
-        progress_frame.columnconfigure(1, weight=1)
+        # Progress bar and counter - smaller, on same row as buttons
+        progress_frame = ttk.Frame(run_button_frame)
+        progress_frame.grid(row=0, column=2, sticky=(tk.W, tk.E), padx=(20, 0))
+        progress_frame.columnconfigure(0, weight=1)
         
-        self.progress_label = ttk.Label(progress_frame, text="Ready")
-        self.progress_label.grid(row=0, column=0, padx=(0, 10), sticky=tk.W)
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=150)
+        self.progress_bar.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
         
-        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=300)
-        self.progress_bar.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
-        
-        self.progress_counter = ttk.Label(progress_frame, text="0 / 0")
-        self.progress_counter.grid(row=0, column=2, sticky=tk.E)
+        self.progress_counter = ttk.Label(progress_frame, text="0/0", font=("", 9))
+        self.progress_counter.grid(row=0, column=1, sticky=tk.E)
         
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
         console_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
@@ -1214,9 +1221,13 @@ class ToolGUI:
                     available_artists = list(metadata_dict.keys())
                     if candidate_names:
                         folder_artists = fuzzy_match_artists(candidate_names, available_artists, threshold=70)
-                        if folder_artists:
+                        if len(folder_artists) == 1:
+                            # Single artist matched - use only that artist
+                            print(f"Fuzzy matched single artist: {folder_artists[0]}")
+                        elif len(folder_artists) > 1:
                             print(f"Fuzzy matched artists: {', '.join(folder_artists)}")
                         else:
+                            # No artists matched - use all artists (larger subset)
                             print("Warning: No artists matched via fuzzy matching. Using all artists.")
                             folder_artists = available_artists
                     else:
@@ -1248,7 +1259,8 @@ class ToolGUI:
                                 all_files = set([f.resolve() for f in files_lower + files_upper])
                                 total_files += len([f for f in all_files if Path(f).is_file()])
                     self._total_files_counted = True
-                    self.root.after(0, lambda: self._update_progress(0, total_files))
+                    self._current_total = total_files
+                    self.root.after(0, lambda t=total_files: self._update_progress(0, t))
                     print(f"Found {total_files} audio files to process")
                 else:
                     total_files = getattr(self, '_current_total', 0)
@@ -1319,7 +1331,10 @@ class ToolGUI:
             # Update progress before processing
             file_index += 1
             if total_files:
-                self.root.after(0, lambda idx=file_index, total=total_files: self._update_progress(idx, total))
+                # Use a closure to capture current values correctly
+                def update_prog(idx=file_index, total=total_files):
+                    self._update_progress(idx, total)
+                self.root.after(0, update_prog)
             
             # Store original file location for output structure preservation
             original_file_location = audio_file
@@ -1329,7 +1344,13 @@ class ToolGUI:
             self.current_audio_file = audio_file
             
             audio_metadata = tag_updater.get_audio_metadata(audio_file)
-            chosen_idx = tag_updater.ask_choice(audio_file.name, audio_metadata, catalogue)
+            # Pass auto_select option to ask_choice
+            chosen_idx = tag_updater.ask_choice(
+                audio_file.name, 
+                audio_metadata, 
+                catalogue,
+                auto_select=self.auto_select.get()
+            )
             
             if chosen_idx != 9999:
                 new_metadata = tag_updater.get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
@@ -1530,19 +1551,13 @@ class ToolGUI:
     def _update_progress(self, current, total):
         """Update progress bar and counter"""
         if total > 0:
-            progress_value = int((current / total) * 100)
             self.progress_bar['maximum'] = total
             self.progress_bar['value'] = current
-            self.progress_counter.config(text=f"{current} / {total}")
-            if current == total:
-                self.progress_label.config(text="Complete")
-            else:
-                self.progress_label.config(text="Processing...")
+            self.progress_counter.config(text=f"{current}/{total}")
         else:
             self.progress_bar['value'] = 0
             self.progress_bar['maximum'] = 100
-            self.progress_counter.config(text="0 / 0")
-            self.progress_label.config(text="Ready")
+            self.progress_counter.config(text="0/0")
     
     def undo_last_operation(self):
         """Undo the last file operation - delete updated file and restore original, then re-run matching"""
@@ -1625,7 +1640,12 @@ class ToolGUI:
             old_input = __builtins__.input
             __builtins__.input = self.custom_input
             
-            chosen_idx = tag_updater.ask_choice(original_path.name, audio_metadata, catalogue)
+            chosen_idx = tag_updater.ask_choice(
+                original_path.name, 
+                audio_metadata, 
+                catalogue,
+                auto_select=self.auto_select.get()
+            )
             
             # Restore input
             __builtins__.input = old_input
