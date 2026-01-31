@@ -67,8 +67,14 @@ class MetaData:
         comment += f"Lineup: {self.lineup}\n"
         comment += f"Label: {self.label}, Master: {self.master}\n"
         for val in ["pianist", "bassist", "bandoneons", "strings"]:
-            if getattr(self, val) != "":
-                comment += f"{val.capitalize()}: {getattr(self, val)}\n"
+            field_value = getattr(self, val, "")
+            # Robust check: handle None, NaN, empty string, and whitespace-only strings
+            # Convert to string and check if it's meaningful
+            if field_value is not None:
+                str_value = str(field_value).strip()
+                # Check if it's not empty and not NaN
+                if str_value and not (isinstance(field_value, float) and pd.isna(field_value)):
+                    comment += f"{val.capitalize()}: {str_value}\n"
         return comment
     def _get_lineup(self):
         lineup = ""
@@ -294,7 +300,13 @@ def save_mp3_metadata(path: Path, new_meta: MetaData) -> None:
         audio.add(TIT1(encoding=3, text=new_meta.grouping))     # Grouping/Content Group
         audio.add(TPUB(encoding=3, text=new_meta.label))
         # Comment (requires special structure)
-        audio.add(COMM(encoding=3, lang='eng', desc='', text=new_meta.comment))
+        # Ensure comment is not None and is a string
+        comment_text = new_meta.comment if new_meta.comment else ""
+        if comment_text:
+            audio.add(COMM(encoding=3, lang='eng', desc='', text=str(comment_text)))
+        else:
+            # Debug: print if comment is empty
+            print(f"  - Warning: Comment is empty for {path.name}")
         
         try:
             audio.save(path, v2_version=3)
@@ -314,7 +326,10 @@ def save_m4a_metadata(path: Path, new_meta: MetaData) -> None:
     audio["©gen"] = [new_meta.genre]
     audio["©grp"] = [new_meta.grouping]
     audio["©day"] = [new_meta.year]
-    audio["©cmt"] = new_meta.comment
+    # Ensure comment is not None and is a string
+    comment_text = new_meta.comment if new_meta.comment else ""
+    if comment_text:
+        audio["©cmt"] = str(comment_text)
     audio["©wrt"] = [new_meta.composer]
     # audio["©pub"] = [new_meta.label]
     set_mp4_freeform(audio, "REMIXER", new_meta.pianist)
@@ -338,12 +353,15 @@ def save_aiff_metadata(path: Path, new_meta) -> None:
     audio.tags['TIT1'] = TIT1(encoding=3, text=new_meta.grouping)
     
     # Comment with proper structure
-    audio.tags['COMM::eng'] = COMM(
-        encoding=3,
-        lang='eng',
-        desc='',
-        text=new_meta.comment
-    )
+    # Ensure comment is not None and is a string
+    comment_text = new_meta.comment if new_meta.comment else ""
+    if comment_text:
+        audio.tags['COMM::eng'] = COMM(
+            encoding=3,
+            lang='eng',
+            desc='',
+            text=str(comment_text)
+        )
     
     audio.save()
 
@@ -362,7 +380,10 @@ def save_flac_metadata(path: Path, new_meta: MetaData) -> None:
     audio["artist"] = new_meta.artist
     audio["genre"] = new_meta.genre
     audio["date"] = new_meta.year
-    audio["comment"] = new_meta.comment
+    # Ensure comment is not None and is a string
+    comment_text = new_meta.comment if new_meta.comment else ""
+    if comment_text:
+        audio["comment"] = str(comment_text)
     audio["composer"] = [new_meta.composer]
     audio["grouping"] = new_meta.grouping
     # Set remixer to original label/publisher value
