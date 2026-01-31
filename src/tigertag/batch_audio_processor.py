@@ -1076,7 +1076,36 @@ def apply_vst3_plugins(
                 continue
             
             try:
-                plugin = Plugin(plugin_path)
+                # Try different methods to load the plugin based on pedalboard version
+                plugin = None
+                plugin_file = Path(plugin_path)
+                
+                # Method 1: Try pedalboard.load_plugin() (newer API)
+                if hasattr(pedalboard, 'load_plugin'):
+                    try:
+                        plugin = pedalboard.load_plugin(str(plugin_file.resolve()))
+                    except Exception:
+                        pass
+                
+                # Method 2: Try Plugin() with string path
+                if plugin is None:
+                    try:
+                        plugin = Plugin(str(plugin_file.resolve()))
+                    except (TypeError, ValueError):
+                        # Method 3: Try Plugin() with Path object
+                        try:
+                            plugin = Plugin(plugin_file)
+                        except (TypeError, ValueError):
+                            # Method 4: Try with just the filename (if in VST3 search path)
+                            try:
+                                plugin = Plugin(plugin_file.name)
+                            except (TypeError, ValueError) as e:
+                                raise ValueError(f"Could not load plugin '{plugin_file.name}'. "
+                                               f"Please ensure the plugin is in a standard VST3 location "
+                                               f"or provide the full path. Error: {e}")
+                
+                if plugin is None:
+                    raise ValueError(f"Plugin loading returned None for: {plugin_path}")
                 
                 # Apply parameters if provided
                 if plugin_parameters and i < len(plugin_parameters):
@@ -1091,6 +1120,8 @@ def apply_vst3_plugins(
                 print(f"  - Loaded VST3 plugin: {Path(plugin_path).name}")
             except Exception as e:
                 print(f"  - Error loading VST3 plugin {Path(plugin_path).name}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
         
         if not plugins:
