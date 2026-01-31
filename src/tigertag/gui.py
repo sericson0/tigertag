@@ -1044,6 +1044,91 @@ class ToolGUI:
         if vdj_path:
             self.vdj_database_path.set(vdj_path)
     
+    def load_all_settings(self):
+        """Load all settings from config file."""
+        # Load folder paths
+        folder_paths = config_handler.get_folder_paths()
+        if folder_paths:
+            self.folder_paths = folder_paths
+            if len(folder_paths) == 1:
+                self.folder_path.set(folder_paths[0])
+            elif len(folder_paths) > 1:
+                self.folder_path.set(f"{len(folder_paths)} folders selected")
+        
+        # Load output folder
+        output_folder = config_handler.get_output_folder_path()
+        if output_folder:
+            self.output_folder_path.set(output_folder)
+        
+        # Load years
+        self.start_year.set(config_handler.get_start_year())
+        self.end_year.set(config_handler.get_end_year())
+        
+        # Load filename format
+        self.filename_format.set(config_handler.get_filename_format())
+        
+        # Load audio processing settings
+        audio_settings = config_handler.get_audio_processing_settings()
+        self.convert_aflac_to_flac.set(audio_settings.get("convert_aflac_to_flac", False))
+        self.convert_to_mono.set(audio_settings.get("convert_to_mono", False))
+        self.convert_to_48khz.set(audio_settings.get("convert_to_48khz", False))
+        self.use_24bit.set(audio_settings.get("use_24bit", False))
+        self.normalize_audio.set(audio_settings.get("normalize_audio", False))
+        self.aufs_target.set(audio_settings.get("aufs_target", "-13.0"))
+        
+        # Load output structure (map from config value to combobox value)
+        structure = config_handler.get_output_structure()
+        if structure == "by_artist":
+            self.output_structure.set("By Artist")
+        else:
+            self.output_structure.set("Preserve Subfolders")
+        
+        # Load auto-select
+        self.auto_select.set(config_handler.get_auto_select())
+        
+        # Load selected artists - will be applied after widgets are created
+        self._saved_selected_artists = config_handler.get_selected_artists()
+    
+    def save_all_settings(self):
+        """Save all current settings to config file."""
+        # Save folder paths
+        config_handler.set_folder_paths(self.folder_paths)
+        
+        # Save output folder
+        config_handler.set_output_folder_path(self.output_folder_path.get())
+        
+        # Save years
+        config_handler.set_start_year(self.start_year.get())
+        config_handler.set_end_year(self.end_year.get())
+        
+        # Save filename format
+        config_handler.set_filename_format(self.filename_format.get())
+        
+        # Save audio processing settings
+        config_handler.set_audio_processing_settings({
+            "convert_aflac_to_flac": self.convert_aflac_to_flac.get(),
+            "convert_to_mono": self.convert_to_mono.get(),
+            "convert_to_48khz": self.convert_to_48khz.get(),
+            "use_24bit": self.use_24bit.get(),
+            "normalize_audio": self.normalize_audio.get(),
+            "aufs_target": self.aufs_target.get(),
+        })
+        
+        # Save output structure (map from combobox value to config value)
+        structure_value = self.output_structure.get()
+        if structure_value == "By Artist":
+            config_handler.set_output_structure("by_artist")
+        else:
+            config_handler.set_output_structure("preserve")
+        
+        # Save auto-select
+        config_handler.set_auto_select(self.auto_select.get())
+        
+        # Save selected artists (if artist_selector exists)
+        if hasattr(self, 'artist_selector'):
+            selected_artists = self.artist_selector.get_selected_artists()
+            config_handler.set_selected_artists(selected_artists)
+    
     def on_link_database_toggle(self):
         """Handle link database checkbox toggle."""
         config_handler.set_link_database(self.link_database.get())
@@ -1094,6 +1179,7 @@ class ToolGUI:
                 self.folder_path.set(f"{len(self.folder_paths)} folders selected")
             else:
                 self.folder_path.set(folder)
+            self.save_all_settings()
             self.save_all_settings()
             
     def submit_input(self):
