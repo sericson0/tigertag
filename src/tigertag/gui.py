@@ -1456,26 +1456,60 @@ class ToolGUI:
             self.current_audio_file = audio_file
             
             audio_metadata = tag_updater.get_audio_metadata(audio_file)
+            
+            # If file has an artist tag, try to subset catalogue to that artist
+            file_catalogue = catalogue.copy()
+            file_artist = audio_metadata.get('artist', '').strip()
+            if file_artist:
+                # Fuzzy match the file's artist against available artists
+                available_artists = list(self.metadata_dict.keys())
+                matched_artists = fuzzy_match_artists({file_artist}, available_artists, threshold=70)
+                
+                if matched_artists:
+                    # Use the first (best) match
+                    matched_artist = matched_artists[0]
+                    # Check if this artist's data is in the current catalogue
+                    if 'Orchestra' in catalogue.columns:
+                        # Filter catalogue to only rows from this artist
+                        file_catalogue = catalogue[catalogue['Orchestra'] == matched_artist].copy()
+                        if len(file_catalogue) > 0:
+                            print(f"  - File artist '{file_artist}' matched to '{matched_artist}', filtering catalogue to this artist only")
+                        else:
+                            # Artist matched but not in current catalogue subset, use original catalogue
+                            file_catalogue = catalogue.copy()
+                    else:
+                        # No Orchestra column, use original catalogue
+                        file_catalogue = catalogue.copy()
+                else:
+                    # No match found, use original catalogue
+                    file_catalogue = catalogue.copy()
+            else:
+                # No artist tag, use original catalogue
+                file_catalogue = catalogue.copy()
+            
             # Pass auto_select option to ask_choice
             chosen_idx = tag_updater.ask_choice(
                 audio_file.name, 
                 audio_metadata, 
-                catalogue,
+                file_catalogue,
                 auto_select=self.auto_select.get()
             )
             
             if chosen_idx != 9999:
-                new_metadata = tag_updater.get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
+                # Get metadata from the file_catalogue (which may be a subset)
+                # The chosen_idx is from file_catalogue, so use that
+                new_metadata = tag_updater.get_updated_metadata(file_catalogue.loc[chosen_idx].to_dict())
                 try:
                     old_filename = audio_file.name
                     old_path_resolved = audio_file.resolve()
                     
                     # Store state for undo before making changes
+                    # Store the original catalogue (not the filtered one) for undo
                     undo_entry = {
                         'original_path': Path(old_path_resolved),
                         'new_path': None,  # Will be set after rename/processing
                         'chosen_idx': chosen_idx,
-                        'catalogue': catalogue,
+                        'catalogue': catalogue,  # Store original catalogue for undo
                         'audio_folder': audio_folder,
                         'audio_metadata': audio_metadata.copy(),
                         'output_folder': self.output_folder_path.get().strip(),
@@ -1754,6 +1788,33 @@ class ToolGUI:
             audio_metadata = last_op['audio_metadata']
             catalogue = last_op['catalogue']
             
+            # Apply same artist filtering logic as in process_folder
+            file_catalogue = catalogue.copy()
+            file_artist = audio_metadata.get('artist', '').strip()
+            if file_artist:
+                # Fuzzy match the file's artist against available artists
+                available_artists = list(self.metadata_dict.keys())
+                matched_artists = fuzzy_match_artists({file_artist}, available_artists, threshold=70)
+                
+                if matched_artists:
+                    # Use the first (best) match
+                    matched_artist = matched_artists[0]
+                    # Check if this artist's data is in the current catalogue
+                    if 'Orchestra' in catalogue.columns:
+                        # Filter catalogue to only rows from this artist
+                        file_catalogue = catalogue[catalogue['Orchestra'] == matched_artist].copy()
+                        if len(file_catalogue) > 0:
+                            print(f"  - File artist '{file_artist}' matched to '{matched_artist}', filtering catalogue to this artist only")
+                        else:
+                            # Artist matched but not in current catalogue subset, use original catalogue
+                            file_catalogue = catalogue.copy()
+                    else:
+                        # No Orchestra column, use original catalogue
+                        file_catalogue = catalogue.copy()
+                else:
+                    # No match found, use original catalogue
+                    file_catalogue = catalogue.copy()
+            
             # Re-run the choice selection
             old_input = __builtins__.input
             __builtins__.input = self.custom_input
@@ -1761,7 +1822,7 @@ class ToolGUI:
             chosen_idx = tag_updater.ask_choice(
                 original_path.name, 
                 audio_metadata, 
-                catalogue,
+                file_catalogue,
                 auto_select=self.auto_select.get()
             )
             
