@@ -24,6 +24,7 @@ def load_config() -> dict:
         "output_structure": "preserve",
         "auto_select": False,
         "year_match": False,
+        "artist_format": "leader - singer",
         "selected_artists": []
     }
     
@@ -175,6 +176,17 @@ def set_year_match(enabled: bool) -> None:
     """Set the year-match setting in config."""
     config = load_config()
     config["year_match"] = enabled
+    save_config(config)
+
+def get_artist_format() -> str:
+    """Get the artist format setting from config."""
+    config = load_config()
+    return config.get("artist_format", "leader - singer")
+
+def set_artist_format(format_str: str) -> None:
+    """Set the artist format setting in config."""
+    config = load_config()
+    config["artist_format"] = format_str
     save_config(config)
 
 def get_selected_artists() -> List[str]:

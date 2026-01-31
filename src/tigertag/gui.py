@@ -786,6 +786,9 @@ class ToolGUI:
         # Year-match option
         self.year_match = tk.BooleanVar(value=False)
         
+        # Artist tag format option
+        self.artist_format = tk.StringVar(value="leader - singer")  # Default format
+        
         # Undo history - stack of operations that can be undone
         self.undo_history = []  # List of dicts with: original_path, new_path, chosen_idx, catalogue, audio_folder
         
@@ -868,12 +871,29 @@ class ToolGUI:
         )
         format_dropdown.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
         
+        # Artist tag format in settings dropdown
+        ttk.Label(self.settings_dropdown.dropdown_frame, text="Artist Tag Format:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        artist_format_options = [
+            "leader",
+            "leader_last",
+            "leader - singer",
+            "leader_last - singer_last",
+        ]
+        artist_format_dropdown = ttk.Combobox(
+            self.settings_dropdown.dropdown_frame,
+            textvariable=self.artist_format,
+            values=artist_format_options,
+            state="readonly",
+            width=50
+        )
+        artist_format_dropdown.grid(row=3, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
+        
         # Update metadata button in settings dropdown
         ttk.Button(
             self.settings_dropdown.dropdown_frame,
             text="Update Metadata",
             command=self.update_metadata
-        ).grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=5)
+        ).grid(row=4, column=0, columnspan=3, sticky=tk.W, padx=5, pady=5)
         
         # Virtual DJ Database Linking in settings dropdown
         vdj_checkbox = ttk.Checkbutton(
@@ -882,11 +902,11 @@ class ToolGUI:
             variable=self.link_database,
             command=self.on_link_database_toggle
         )
-        vdj_checkbox.grid(row=4, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        vdj_checkbox.grid(row=5, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
         
         # Database path frame in settings dropdown
         db_path_frame = ttk.Frame(self.settings_dropdown.dropdown_frame)
-        db_path_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
+        db_path_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
         db_path_frame.columnconfigure(0, weight=1)
         
         ttk.Entry(db_path_frame, textvariable=self.vdj_database_path, state='readonly').grid(
@@ -1099,6 +1119,11 @@ class ToolGUI:
         # Load year-match
         self.year_match.set(config_handler.get_year_match())
         
+        # Load artist format
+        artist_format = config_handler.get_artist_format()
+        if artist_format:
+            self.artist_format.set(artist_format)
+        
         # Load selected artists - will be applied after widgets are created
         self._saved_selected_artists = config_handler.get_selected_artists()
     
@@ -1139,6 +1164,9 @@ class ToolGUI:
         
         # Save year-match
         config_handler.set_year_match(self.year_match.get())
+        
+        # Save artist format
+        config_handler.set_artist_format(self.artist_format.get())
         
         # Save selected artists (if artist_selector exists)
         if hasattr(self, 'artist_selector'):
@@ -1534,7 +1562,10 @@ class ToolGUI:
             if chosen_idx != 9999:
                 # Get metadata from the file_catalogue (which may be a subset)
                 # The chosen_idx is from file_catalogue, so use that
-                new_metadata = tag_updater.get_updated_metadata(file_catalogue.loc[chosen_idx].to_dict())
+                new_metadata = tag_updater.get_updated_metadata(
+                    file_catalogue.loc[chosen_idx].to_dict(),
+                    artist_format=self.artist_format.get()
+                )
                 try:
                     old_filename = audio_file.name
                     old_path_resolved = audio_file.resolve()

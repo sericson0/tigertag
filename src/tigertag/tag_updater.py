@@ -48,11 +48,29 @@ class MetaData:
     artist    : str = None
     leader_last_name : str = None  # Changed from orchestra_last_name
     singer_last_name : str = None
+    artist_format : str = "leader - singer"  # Format for artist tag
     
     def __post_init__(self):
-        self.artist = f"{self.bandleader} - {self.singer}"
         self.leader_last_name = self._get_last_name(self.bandleader)
         self.singer_last_name = self._get_last_name(self.singer)
+        singer_last_names = self._parse_singer_last_names(self.singer)
+        
+        # Build artist tag based on format
+        if self.artist_format == "leader":
+            self.artist = self.bandleader
+        elif self.artist_format == "leader_last":
+            self.artist = self.leader_last_name
+        elif self.artist_format == "leader - singer":
+            self.artist = f"{self.bandleader} - {self.singer}"
+        elif self.artist_format == "leader_last - singer_last":
+            if singer_last_names:
+                self.artist = f"{self.leader_last_name} - {singer_last_names}"
+            else:
+                self.artist = self.leader_last_name
+        else:
+            # Default fallback
+            self.artist = f"{self.bandleader} - {self.singer}"
+        
         self.lineup = self._get_lineup()
         comment = ""
         for val in ["bandleader", "orchestra", "singer", "date", "label", "grouping", "master", "composer", "author", "pianist",
@@ -148,9 +166,30 @@ class MetaData:
                 return f"{second_to_last} {last_name}"
         
         return last_name
+    
+    def _parse_singer_last_names(self, singer: str) -> str:
+        """Parse multiple singers and return their last names joined with ' - '.
+        Handles separators: comma, ' and ', ' y '"""
+        if not singer or not str(singer).strip():
+            return ""
+        
+        # Split by common separators
+        import re
+        # Split by comma, ' and ', or ' y ' (case insensitive)
+        singers = re.split(r',\s*|\s+and\s+|\s+y\s+', str(singer), flags=re.IGNORECASE)
+        
+        last_names = []
+        for s in singers:
+            s = s.strip()
+            if s:
+                last_name = self._get_last_name(s)
+                if last_name:
+                    last_names.append(last_name)
+        
+        return " - ".join(last_names) if last_names else ""
 
 
-def get_updated_metadata(dct: dict):
+def get_updated_metadata(dct: dict, artist_format: str = "leader - singer"):
     dct = {k.lower(): v for k, v in dct.items()}
     
     # Helper function to convert NaN/None to empty string
@@ -178,6 +217,7 @@ def get_updated_metadata(dct: dict):
         bassist    = clean_value(dct.get("bassist", "")),
         bandoneons = clean_value(dct.get("bandoneons", "")),
         strings    = clean_value(dct.get("strings", "")),
+        artist_format = artist_format,
     )
     return new_metadata
 
@@ -693,7 +733,7 @@ def update_tags(audio_folder, catalogue):
 
         chosen_idx = ask_choice(file, audio_metadata, catalogue)
         if chosen_idx != 9999:
-            new_metadata = get_updated_metadata(catalogue.loc[chosen_idx].to_dict())
+            new_metadata = get_updated_metadata(catalogue.loc[chosen_idx].to_dict(), artist_format="leader - singer")
             try:
                 old_filename = audio_file.name
                 old_path_resolved = audio_file.resolve()
