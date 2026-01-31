@@ -1035,7 +1035,11 @@ def process_audio_file(
     denoise: bool = False,
     denoise_strength: str = "moderate",
     auto_detect_noise: bool = True,
-    prompt_user: Optional[callable] = None
+    prompt_user: Optional[callable] = None,
+    noise_threshold: float = 0.15,
+    denoise_stationary: bool = True,
+    prop_decrease: float = 0.5,
+    use_noise_sample: bool = True
 ) -> bool:
     """
     Process a single audio file with optional transformations.

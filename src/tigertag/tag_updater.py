@@ -250,6 +250,17 @@ def get_audio_metadata(path: Union[str, Path]) -> Dict[str, str]:
     # Convert to Path object if it's a string
     path = Path(path) if isinstance(path, str) else path
     
+    # Skip macOS resource fork files (._*)
+    if path.name.startswith('._'):
+        return {
+            "title": "",
+            "artist": "",
+            "album": "",
+            "tracknumber": "",
+            "genre": "",
+            "date": "",
+        }
+    
     # Check if it's an AIFF file
     if path.suffix.lower() in ['.aif', '.aiff', '.aifc']:
         try:

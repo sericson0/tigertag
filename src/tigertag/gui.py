@@ -1401,7 +1401,8 @@ class ToolGUI:
                         files_upper = list(folder_path.rglob(f'*{ext.upper()}'))
                         # Count unique files (resolve to handle case-insensitive duplicates)
                         all_files = set([f.resolve() for f in files_lower + files_upper])
-                        total_files += len([f for f in all_files if Path(f).is_file()])
+                        # Filter out macOS resource fork files (._*)
+                        total_files += len([f for f in all_files if Path(f).is_file() and not Path(f).name.startswith('._')])
             
             # Set total files and initialize progress
             self._current_total = total_files
@@ -1445,7 +1446,7 @@ class ToolGUI:
                     # Extract artist names from file tags
                     audio_extensions = ('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')
                     for audio_file in folder.rglob('*'):
-                        if audio_file.is_file() and audio_file.suffix.lower() in audio_extensions:
+                        if audio_file.is_file() and audio_file.suffix.lower() in audio_extensions and not audio_file.name.startswith('._'):
                             try:
                                 tagged_artist = extract_artist_from_file_tags(audio_file)
                                 if tagged_artist:
@@ -1554,8 +1555,8 @@ class ToolGUI:
         audio_files = list(set([f.resolve() for f in audio_files]))
         audio_files.sort()
         
-        # Filter to only files
-        audio_files = [f for f in audio_files if f.is_file()]
+        # Filter to only files and exclude macOS resource fork files (._*)
+        audio_files = [f for f in audio_files if f.is_file() and not f.name.startswith('._')]
         
         file_index = current_index
         
