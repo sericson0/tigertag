@@ -1460,7 +1460,10 @@ class ToolGUI:
             # If file has an artist tag, try to subset catalogue to that artist
             file_catalogue = catalogue.copy()
             file_artist = audio_metadata.get('artist', '').strip()
+            
             if file_artist:
+                print(f"\n  - File has artist tag: '{file_artist}'")
+                
                 # Fuzzy match the file's artist against available artists
                 available_artists = list(self.metadata_dict.keys())
                 matched_artists = fuzzy_match_artists({file_artist}, available_artists, threshold=70)
@@ -1468,23 +1471,37 @@ class ToolGUI:
                 if matched_artists:
                     # Use the first (best) match
                     matched_artist = matched_artists[0]
-                    # Check if this artist's data is in the current catalogue
-                    if 'Orchestra' in catalogue.columns:
+                    print(f"  - Matched file artist '{file_artist}' to catalogue artist '{matched_artist}'")
+                    
+                    # Find the Orchestra column (case-insensitive)
+                    orchestra_col = None
+                    for col in catalogue.columns:
+                        if col.lower() == 'orchestra':
+                            orchestra_col = col
+                            break
+                    
+                    if orchestra_col:
                         # Filter catalogue to only rows from this artist
-                        file_catalogue = catalogue[catalogue['Orchestra'] == matched_artist].copy()
-                        if len(file_catalogue) > 0:
-                            print(f"  - File artist '{file_artist}' matched to '{matched_artist}', filtering catalogue to this artist only")
+                        original_count = len(catalogue)
+                        file_catalogue = catalogue[catalogue[orchestra_col] == matched_artist].copy()
+                        filtered_count = len(file_catalogue)
+                        
+                        if filtered_count > 0:
+                            print(f"  - Filtered catalogue from {original_count} to {filtered_count} entries (artist: '{matched_artist}')")
                         else:
                             # Artist matched but not in current catalogue subset, use original catalogue
+                            print(f"  - Warning: Matched artist '{matched_artist}' not found in current catalogue subset, using full catalogue")
                             file_catalogue = catalogue.copy()
                     else:
-                        # No Orchestra column, use original catalogue
+                        # No Orchestra column found
+                        print(f"  - Warning: 'Orchestra' column not found in catalogue. Available columns: {list(catalogue.columns)}")
                         file_catalogue = catalogue.copy()
                 else:
-                    # No match found, use original catalogue
+                    # No match found
+                    print(f"  - No match found for file artist '{file_artist}' in available artists, using full catalogue")
                     file_catalogue = catalogue.copy()
             else:
-                # No artist tag, use original catalogue
+                # No artist tag
                 file_catalogue = catalogue.copy()
             
             # Pass auto_select option to ask_choice
@@ -1791,7 +1808,10 @@ class ToolGUI:
             # Apply same artist filtering logic as in process_folder
             file_catalogue = catalogue.copy()
             file_artist = audio_metadata.get('artist', '').strip()
+            
             if file_artist:
+                print(f"\n  - File has artist tag: '{file_artist}'")
+                
                 # Fuzzy match the file's artist against available artists
                 available_artists = list(self.metadata_dict.keys())
                 matched_artists = fuzzy_match_artists({file_artist}, available_artists, threshold=70)
@@ -1799,20 +1819,34 @@ class ToolGUI:
                 if matched_artists:
                     # Use the first (best) match
                     matched_artist = matched_artists[0]
-                    # Check if this artist's data is in the current catalogue
-                    if 'Orchestra' in catalogue.columns:
+                    print(f"  - Matched file artist '{file_artist}' to catalogue artist '{matched_artist}'")
+                    
+                    # Find the Orchestra column (case-insensitive)
+                    orchestra_col = None
+                    for col in catalogue.columns:
+                        if col.lower() == 'orchestra':
+                            orchestra_col = col
+                            break
+                    
+                    if orchestra_col:
                         # Filter catalogue to only rows from this artist
-                        file_catalogue = catalogue[catalogue['Orchestra'] == matched_artist].copy()
-                        if len(file_catalogue) > 0:
-                            print(f"  - File artist '{file_artist}' matched to '{matched_artist}', filtering catalogue to this artist only")
+                        original_count = len(catalogue)
+                        file_catalogue = catalogue[catalogue[orchestra_col] == matched_artist].copy()
+                        filtered_count = len(file_catalogue)
+                        
+                        if filtered_count > 0:
+                            print(f"  - Filtered catalogue from {original_count} to {filtered_count} entries (artist: '{matched_artist}')")
                         else:
                             # Artist matched but not in current catalogue subset, use original catalogue
+                            print(f"  - Warning: Matched artist '{matched_artist}' not found in current catalogue subset, using full catalogue")
                             file_catalogue = catalogue.copy()
                     else:
-                        # No Orchestra column, use original catalogue
+                        # No Orchestra column found
+                        print(f"  - Warning: 'Orchestra' column not found in catalogue. Available columns: {list(catalogue.columns)}")
                         file_catalogue = catalogue.copy()
                 else:
-                    # No match found, use original catalogue
+                    # No match found
+                    print(f"  - No match found for file artist '{file_artist}' in available artists, using full catalogue")
                     file_catalogue = catalogue.copy()
             
             # Re-run the choice selection
