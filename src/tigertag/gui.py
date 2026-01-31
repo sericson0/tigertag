@@ -786,9 +786,7 @@ class ToolGUI:
         # Undo history - stack of operations that can be undone
         self.undo_history = []  # List of dicts with: original_path, new_path, chosen_idx, catalogue, audio_folder
         
-        # Load saved config
-        self.load_vdj_config()
-        
+        # Load saved config (will be loaded after widgets are created)
         self.artists = artists
         self.metadata_dict = metadata_dict
         self.current_audio_file = None  # Track current file being processed
@@ -796,11 +794,16 @@ class ToolGUI:
         # Create GUI elements
         self.create_widgets()
         
+        # Load saved settings after widgets are created
+        self.load_all_settings()
+        
         # Handle window close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
     def on_closing(self):
         """Handle window closing"""
+        # Save all settings before closing
+        self.save_all_settings()
         if hasattr(self, 'music_player'):
             self.music_player.cleanup()
         self.root.destroy()
@@ -1077,6 +1080,8 @@ class ToolGUI:
             if start_year is not None:
                 self.start_year.set(str(start_year))
                 self.end_year.set(str(end_year))
+            
+            self.save_all_settings()
     
     def browse_multiple_folders(self):
         """Browse for multiple folders to process"""
@@ -1089,6 +1094,7 @@ class ToolGUI:
                 self.folder_path.set(f"{len(self.folder_paths)} folders selected")
             else:
                 self.folder_path.set(folder)
+            self.save_all_settings()
             
     def submit_input(self):
         if self.waiting_for_input:
