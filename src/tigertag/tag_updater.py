@@ -95,7 +95,13 @@ class MetaData:
         musicians = str(musicians).strip()
         if not musicians:
             return ""
+        # Split by comma and process each player
         for player in musicians.split(","):
+            # Strip whitespace from each player entry
+            player = player.strip()
+            # Skip empty entries (from double commas or trailing commas)
+            if not player:
+                continue
             # Check if player has instrument in parentheses
             if "(" in player and ")" in player:
                 # Extract instrument name from parentheses
@@ -106,6 +112,7 @@ class MetaData:
                     instrument = instrument.capitalize()
                     other_instruments[instrument] = other_instruments.get(instrument, 0) + 1
             else:
+                # Count as default instrument (e.g., Bandoneon or Violin)
                 default_count += 1
         if default_count == 1:
             lineup += f"{default}, "
@@ -135,22 +142,31 @@ class MetaData:
 
 def get_updated_metadata(dct: dict):
     dct = {k.lower(): v for k, v in dct.items()}
+    
+    # Helper function to convert NaN/None to empty string
+    def clean_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, float) and pd.isna(value):
+            return ""
+        return str(value) if value else ""
+    
     new_metadata = MetaData(
-        title      = dct.get("title", ""),
-        orchestra  = dct.get("orchestra", ""),
-        genre      = dct.get("genre",""),
-        year       = dct.get("year", ""),
-        date       = dct.get("date", ""),
-        label      = dct.get("label", ""),
-        grouping   = dct.get("grouping", ""),
-        master     = dct.get("master", ""),
-        composer   = dct.get("composer", ""),
-        author     = dct.get("author", ""),
-        singer     = dct.get("singer", ""),
-        pianist    = dct.get("pianist", ""),
-        bassist    = dct.get("bassist", ""),
-        bandoneons = dct.get("bandoneons", ""),
-        strings    = dct.get("strings", ""),
+        title      = clean_value(dct.get("title", "")),
+        orchestra  = clean_value(dct.get("orchestra", "")),
+        genre      = clean_value(dct.get("genre", "")),
+        year       = clean_value(dct.get("year", "")),
+        date       = clean_value(dct.get("date", "")),
+        label      = clean_value(dct.get("label", "")),
+        grouping   = clean_value(dct.get("grouping", "")),
+        master     = clean_value(dct.get("master", "")),
+        composer   = clean_value(dct.get("composer", "")),
+        author     = clean_value(dct.get("author", "")),
+        singer     = clean_value(dct.get("singer", "")),
+        pianist    = clean_value(dct.get("pianist", "")),
+        bassist    = clean_value(dct.get("bassist", "")),
+        bandoneons = clean_value(dct.get("bandoneons", "")),
+        strings    = clean_value(dct.get("strings", "")),
     )
     return new_metadata
 
