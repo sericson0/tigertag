@@ -25,7 +25,10 @@ def load_config() -> dict:
         "auto_select": False,
         "year_match": False,
         "artist_format": "leader - singer",
-        "selected_artists": []
+        "selected_artists": [],
+        "enable_vst3": False,
+        "vst3_plugins": [],
+        "vst3_parameters": []
     }
     
     if CONFIG_FILE.exists():
@@ -198,6 +201,39 @@ def set_selected_artists(artists: List[str]) -> None:
     """Set the list of selected artists in config."""
     config = load_config()
     config["selected_artists"] = artists
+    save_config(config)
+
+def get_enable_vst3() -> bool:
+    """Get the enable VST3 setting from config."""
+    config = load_config()
+    return config.get("enable_vst3", False)
+
+def set_enable_vst3(enabled: bool) -> None:
+    """Set the enable VST3 setting in config."""
+    config = load_config()
+    config["enable_vst3"] = enabled
+    save_config(config)
+
+def get_vst3_plugins() -> List[str]:
+    """Get the list of VST3 plugin paths from config."""
+    config = load_config()
+    return config.get("vst3_plugins", [])
+
+def set_vst3_plugins(plugins: List[str]) -> None:
+    """Set the list of VST3 plugin paths in config."""
+    config = load_config()
+    config["vst3_plugins"] = plugins
+    save_config(config)
+
+def get_vst3_parameters() -> List[dict]:
+    """Get the list of VST3 plugin parameters from config."""
+    config = load_config()
+    return config.get("vst3_parameters", [])
+
+def set_vst3_parameters(parameters: List[dict]) -> None:
+    """Set the list of VST3 plugin parameters in config."""
+    config = load_config()
+    config["vst3_parameters"] = parameters
     save_config(config)
 
 def save_all_settings(settings: dict) -> None:

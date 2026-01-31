@@ -1023,6 +1023,128 @@ def apply_denoising(
         return audio_segment
 
 
+def apply_vst3_plugins(
+    audio_segment: AudioSegment,
+    plugin_paths: List[str],
+    plugin_parameters: Optional[List[Dict[str, float]]] = None
+) -> AudioSegment:
+    """
+    Apply VST3 plugins to audio segment using pedalboard library.
+    
+    Args:
+        audio_segment: AudioSegment to process
+        plugin_paths: List of paths to VST3 plugin files (.vst3)
+        plugin_parameters: Optional list of parameter dictionaries for each plugin.
+                          Each dict maps parameter names to values.
+    
+    Returns:
+        Processed AudioSegment
+    """
+    try:
+        import pedalboard
+        from pedalboard import Pedalboard, Plugin
+        
+        if not plugin_paths:
+            return audio_segment
+        
+        # Convert AudioSegment to numpy array
+        samples = np.array(audio_segment.get_array_of_samples())
+        original_channels = audio_segment.channels
+        sample_rate = audio_segment.frame_rate
+        
+        # Reshape for multi-channel
+        if original_channels > 1:
+            samples = samples.reshape(-1, original_channels)
+        else:
+            samples = samples.reshape(-1, 1)
+        
+        # Normalize to float32 (-1.0 to 1.0 range)
+        if audio_segment.sample_width == 1:
+            samples = samples.astype(np.float32) / 128.0 - 1.0
+        elif audio_segment.sample_width == 2:
+            samples = samples.astype(np.float32) / 32768.0
+        elif audio_segment.sample_width == 4:
+            samples = samples.astype(np.float32) / 2147483648.0
+        else:
+            samples = samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+        
+        # Create pedalboard with plugins
+        plugins = []
+        for i, plugin_path in enumerate(plugin_paths):
+            if not Path(plugin_path).exists():
+                print(f"  - Warning: VST3 plugin not found: {plugin_path}")
+                continue
+            
+            try:
+                plugin = Plugin(plugin_path)
+                
+                # Apply parameters if provided
+                if plugin_parameters and i < len(plugin_parameters):
+                    params = plugin_parameters[i]
+                    for param_name, param_value in params.items():
+                        try:
+                            setattr(plugin, param_name, param_value)
+                        except (AttributeError, ValueError) as e:
+                            print(f"  - Warning: Could not set parameter {param_name} on plugin {Path(plugin_path).name}: {e}")
+                
+                plugins.append(plugin)
+                print(f"  - Loaded VST3 plugin: {Path(plugin_path).name}")
+            except Exception as e:
+                print(f"  - Error loading VST3 plugin {Path(plugin_path).name}: {e}")
+                continue
+        
+        if not plugins:
+            print("  - No valid VST3 plugins loaded, skipping VST3 processing")
+            return audio_segment
+        
+        # Create pedalboard and process
+        board = Pedalboard(plugins)
+        processed_samples = board(samples, sample_rate)
+        
+        # Ensure output is 2D (samples, channels)
+        if processed_samples.ndim == 1:
+            processed_samples = processed_samples.reshape(-1, 1)
+        
+        # Clip to valid range
+        processed_samples = np.clip(processed_samples, -1.0, 1.0)
+        
+        # Convert back to original bit depth
+        if audio_segment.sample_width == 2:
+            processed_samples = (processed_samples * 32768.0).astype(np.int16)
+        elif audio_segment.sample_width == 1:
+            processed_samples = ((processed_samples + 1.0) * 128.0).astype(np.uint8)
+        elif audio_segment.sample_width == 4:
+            processed_samples = (processed_samples * 2147483648.0).astype(np.int32)
+        else:
+            processed_samples = (processed_samples * (2.0 ** (audio_segment.sample_width * 8 - 1))).astype(np.int32)
+        
+        # Flatten for AudioSegment
+        if original_channels > 1:
+            processed_samples = processed_samples.flatten()
+        else:
+            processed_samples = processed_samples.flatten()
+        
+        # Create new AudioSegment
+        processed_audio = AudioSegment(
+            processed_samples.tobytes(),
+            frame_rate=sample_rate,
+            sample_width=audio_segment.sample_width,
+            channels=original_channels
+        )
+        
+        print(f"  - Applied {len(plugins)} VST3 plugin(s)")
+        return processed_audio
+        
+    except ImportError:
+        print("  - Error: pedalboard library not installed. Install with: pip install pedalboard")
+        return audio_segment
+    except Exception as e:
+        print(f"  - Error applying VST3 plugins: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return audio_segment
+
+
 def process_audio_file(
     input_path: Path, 
     output_path: Path, 
@@ -1039,7 +1161,9 @@ def process_audio_file(
     noise_threshold: float = 0.15,
     denoise_stationary: bool = True,
     prop_decrease: float = 0.5,
-    use_noise_sample: bool = True
+    use_noise_sample: bool = True,
+    vst3_plugins: Optional[List[str]] = None,
+    vst3_parameters: Optional[List[Dict[str, float]]] = None
 ) -> bool:
     """
     Process a single audio file with optional transformations.
@@ -1170,12 +1294,16 @@ def process_audio_file(
                 )
                 print(f"  - Applied denoising (strength: {denoise_strength}, reduction: {actual_prop_decrease:.1%}, stationary: {actual_stationary})")
         
-        # 4. Normalize using AUFS (if requested)
+        # 4. Apply VST3 plugins (if requested) - after denoising, before normalization
+        if vst3_plugins:
+            audio = apply_vst3_plugins(audio, vst3_plugins, vst3_parameters)
+        
+        # 5. Normalize using AUFS (if requested)
         if normalize:
             audio = aufs_normalize(audio, target_lufs)
             print(f"  - Applied AUFS normalization (target: {target_lufs} LUFS)")
         
-        # 5. Export with 24-bit depth
+        # 6. Export with 24-bit depth
         # Preserve the original file extension
         output_path.parent.mkdir(parents=True, exist_ok=True)
         

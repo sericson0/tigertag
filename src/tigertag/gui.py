@@ -785,6 +785,11 @@ class ToolGUI:
         self.prop_decrease = tk.StringVar(value="0.5")  # Proportion of noise to reduce (0.0-1.0)
         self.use_noise_sample = tk.BooleanVar(value=True)  # Use noise sample from quiet sections
         
+        # VST3 plugin options
+        self.enable_vst3 = tk.BooleanVar(value=False)
+        self.vst3_plugins = []  # List of VST3 plugin paths
+        self.vst3_parameters = []  # List of parameter dicts for each plugin
+        
         # Output folder for processed audio files
         self.output_folder_path = tk.StringVar()
         self.output_structure = tk.StringVar(value="preserve")  # "preserve" or "by_artist"
@@ -837,7 +842,7 @@ class ToolGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(6, weight=1)  # Console row
+        main_frame.rowconfigure(7, weight=1)  # Console row
         
         # Top row: Settings, Audio Processing, and Denoising dropdowns
         top_row_frame = ttk.Frame(main_frame)
@@ -1042,21 +1047,64 @@ class ToolGUI:
         ttk.Label(year_frame, text="End Year:").grid(row=0, column=1, sticky=tk.W, padx=(0, 5))
         ttk.Entry(year_frame, textvariable=self.end_year, width=15).grid(row=0, column=2, sticky=tk.W)
         
-        # Artist selector (row 3)
-        ttk.Label(main_frame, text="Artists:").grid(row=3, column=0, sticky=(tk.W, tk.N), pady=5)
+        # VST3 plugins dropdown (row 3)
+        vst3_row_frame = ttk.Frame(main_frame)
+        vst3_row_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        vst3_row_frame.columnconfigure(0, weight=1)
+        
+        self.vst3_dropdown = AudioProcessingDropdown(vst3_row_frame)
+        self.vst3_dropdown.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=0)
+        self.vst3_dropdown.title_label.config(text="VST3 Plugin Options")
+        
+        # Enable VST3 checkbox
+        self.vst3_dropdown.add_checkbox(
+            "Enable VST3 Processing", self.enable_vst3, 0, 0
+        )
+        
+        # Plugin list frame
+        plugin_list_frame = ttk.Frame(self.vst3_dropdown.dropdown_frame)
+        plugin_list_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=5)
+        plugin_list_frame.columnconfigure(0, weight=1)
+        
+        # Plugin listbox with scrollbar
+        ttk.Label(plugin_list_frame, text="VST3 Plugins:").grid(row=0, column=0, sticky=tk.W, pady=(0, 2))
+        listbox_frame = ttk.Frame(plugin_list_frame)
+        listbox_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        listbox_frame.columnconfigure(0, weight=1)
+        
+        self.vst3_listbox = tk.Listbox(listbox_frame, height=4, selectmode=tk.SINGLE)
+        self.vst3_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        vst3_scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self.vst3_listbox.yview)
+        vst3_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.vst3_listbox.config(yscrollcommand=vst3_scrollbar.set)
+        
+        # Buttons for managing plugins
+        plugin_button_frame = ttk.Frame(plugin_list_frame)
+        plugin_button_frame.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=2)
+        
+        ttk.Button(plugin_button_frame, text="Add Plugin", command=self.add_vst3_plugin).grid(row=0, column=0, padx=2)
+        ttk.Button(plugin_button_frame, text="Remove Selected", command=self.remove_vst3_plugin).grid(row=0, column=1, padx=2)
+        ttk.Button(plugin_button_frame, text="Clear All", command=self.clear_vst3_plugins).grid(row=0, column=2, padx=2)
+        
+        # Update listbox if plugins were loaded from config
+        if hasattr(self, '_vst3_plugins_loaded') and self._vst3_plugins_loaded:
+            self.update_vst3_listbox()
+        
+        # Artist selector (row 4, moved down)
+        ttk.Label(main_frame, text="Artists:").grid(row=4, column=0, sticky=(tk.W, tk.N), pady=5)
         self.artist_selector = ArtistSelectorDropdown(main_frame, self.artists)
-        self.artist_selector.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=5)
+        self.artist_selector.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=5)
         
         player_frame = ttk.LabelFrame(main_frame, text="Music Player", padding="5")
-        player_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=5)
+        player_frame.grid(row=5, column=1, sticky=(tk.W, tk.E), pady=5)
         player_frame.columnconfigure(0, weight=1)
         
         self.music_player = MusicPlayer(player_frame)
         self.music_player.pack(fill=tk.BOTH, expand=True)
         
-        # Run button, toggles, and Undo button (row 5) - on same line
+        # Run button, toggles, and Undo button (row 6) - on same line
         run_button_frame = ttk.Frame(main_frame)
-        run_button_frame.grid(row=5, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
+        run_button_frame.grid(row=6, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
         run_button_frame.columnconfigure(0, weight=1)
         
         # Toggle buttons for processing options (on same line as run button)
@@ -1101,7 +1149,7 @@ class ToolGUI:
         self.progress_counter.grid(row=0, column=1, sticky=tk.E)
         
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
-        console_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        console_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         console_frame.columnconfigure(0, weight=1)
         console_frame.rowconfigure(0, weight=1)
         
@@ -1204,6 +1252,11 @@ class ToolGUI:
         
         # Load selected artists - will be applied after widgets are created
         self._saved_selected_artists = config_handler.get_selected_artists()
+        
+        # Load VST3 settings
+        self.enable_vst3.set(config_handler.get_enable_vst3())
+        self.vst3_plugins = config_handler.get_vst3_plugins()
+        self.vst3_parameters = config_handler.get_vst3_parameters()
     
     def save_all_settings(self):
         """Save all current settings to config file."""
@@ -1250,6 +1303,11 @@ class ToolGUI:
         if hasattr(self, 'artist_selector'):
             selected_artists = self.artist_selector.get_selected_artists()
             config_handler.set_selected_artists(selected_artists)
+        
+        # Save VST3 settings
+        config_handler.set_enable_vst3(self.enable_vst3.get())
+        config_handler.set_vst3_plugins(self.vst3_plugins)
+        config_handler.set_vst3_parameters(self.vst3_parameters)
     
     def on_link_database_toggle(self):
         """Handle link database checkbox toggle."""
@@ -1275,6 +1333,42 @@ class ToolGUI:
         print("Updating Metadata")
         csv_to_parquet()
 
+    def add_vst3_plugin(self):
+        """Add a VST3 plugin to the list."""
+        plugin_path = filedialog.askopenfilename(
+            title="Select VST3 Plugin",
+            filetypes=[("VST3 Plugins", "*.vst3"), ("All Files", "*.*")]
+        )
+        if plugin_path:
+            plugin_path = Path(plugin_path)
+            if plugin_path.suffix.lower() == '.vst3':
+                self.vst3_plugins.append(str(plugin_path))
+                self.vst3_parameters.append({})  # Empty parameters dict
+                self.update_vst3_listbox()
+            else:
+                print(f"Error: {plugin_path.name} is not a VST3 plugin (.vst3 file)")
+    
+    def remove_vst3_plugin(self):
+        """Remove the selected VST3 plugin from the list."""
+        selection = self.vst3_listbox.curselection()
+        if selection:
+            index = selection[0]
+            self.vst3_plugins.pop(index)
+            self.vst3_parameters.pop(index)
+            self.update_vst3_listbox()
+    
+    def clear_vst3_plugins(self):
+        """Clear all VST3 plugins from the list."""
+        self.vst3_plugins.clear()
+        self.vst3_parameters.clear()
+        self.update_vst3_listbox()
+    
+    def update_vst3_listbox(self):
+        """Update the VST3 plugin listbox display."""
+        self.vst3_listbox.delete(0, tk.END)
+        for plugin_path in self.vst3_plugins:
+            self.vst3_listbox.insert(tk.END, Path(plugin_path).name)
+    
     def browse_folder(self):
         folder = filedialog.askdirectory()
         if folder:
@@ -1691,7 +1785,9 @@ class ToolGUI:
                             noise_threshold=noise_threshold_value,
                             denoise_stationary=self.denoise_stationary.get(),
                             prop_decrease=prop_decrease_value,
-                            use_noise_sample=self.use_noise_sample.get()
+                            use_noise_sample=self.use_noise_sample.get(),
+                            vst3_plugins=self.vst3_plugins if self.enable_vst3.get() else None,
+                            vst3_parameters=self.vst3_parameters if self.enable_vst3.get() else None
                         )
                         if success:
                             print(f"✓ Audio processing completed for: {audio_output_path.name}\n")
@@ -1944,7 +2040,13 @@ class ToolGUI:
                                 denoise=self.enable_denoise.get(),
                                 denoise_strength=self.denoise_strength.get(),
                                 auto_detect_noise=self.auto_detect_noise.get(),
-                                prompt_user=self.custom_input if self.auto_detect_noise.get() else None
+                                prompt_user=self.custom_input if self.auto_detect_noise.get() else None,
+                                noise_threshold=noise_threshold_value,
+                                denoise_stationary=self.denoise_stationary.get(),
+                                prop_decrease=prop_decrease_value,
+                                use_noise_sample=self.use_noise_sample.get(),
+                                vst3_plugins=self.vst3_plugins if self.enable_vst3.get() else None,
+                                vst3_parameters=self.vst3_parameters if self.enable_vst3.get() else None
                             )
                             if success:
                                 print(f"✓ Audio processing completed for: {audio_output_path.name}\n")
