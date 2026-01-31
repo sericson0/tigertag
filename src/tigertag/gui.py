@@ -789,6 +789,11 @@ class ToolGUI:
         # Artist tag format option
         self.artist_format = tk.StringVar(value="leader - singer")  # Default format
         
+        # Toggle options for processing steps
+        self.update_metadata = tk.BooleanVar(value=True)  # Default: enabled
+        self.update_filename = tk.BooleanVar(value=True)  # Default: enabled
+        self.process_audio = tk.BooleanVar(value=True)  # Default: enabled
+        
         # Undo history - stack of operations that can be undone
         self.undo_history = []  # List of dicts with: original_path, new_path, chosen_idx, catalogue, audio_folder
         
@@ -999,21 +1004,44 @@ class ToolGUI:
         self.music_player = MusicPlayer(player_frame)
         self.music_player.pack(fill=tk.BOTH, expand=True)
         
-        # Run button and Undo button (row 5) - centered
+        # Run button, toggles, and Undo button (row 5) - on same line
         run_button_frame = ttk.Frame(main_frame)
         run_button_frame.grid(row=5, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
         run_button_frame.columnconfigure(0, weight=1)
         
+        # Toggle buttons for processing options (on same line as run button)
+        self.update_metadata_check = ttk.Checkbutton(
+            run_button_frame, 
+            text="Update Metadata", 
+            variable=self.update_metadata
+        )
+        self.update_metadata_check.grid(row=0, column=0, padx=5)
+        
+        self.update_filename_check = ttk.Checkbutton(
+            run_button_frame, 
+            text="Update Filename", 
+            variable=self.update_filename
+        )
+        self.update_filename_check.grid(row=0, column=1, padx=5)
+        
+        self.process_audio_check = ttk.Checkbutton(
+            run_button_frame, 
+            text="Process Audio", 
+            variable=self.process_audio
+        )
+        self.process_audio_check.grid(row=0, column=2, padx=5)
+        
+        # Run button - centered
         self.run_button = ttk.Button(run_button_frame, text="Run TigerTag", command=self.run_tag_updater)
-        self.run_button.grid(row=0, column=0)
+        self.run_button.grid(row=0, column=3, padx=(20, 0))
         
         # Undo button
         self.undo_button = ttk.Button(run_button_frame, text="Undo Last", command=self.undo_last_operation, state='disabled')
-        self.undo_button.grid(row=0, column=1, padx=(10, 0))
+        self.undo_button.grid(row=0, column=4, padx=(10, 0))
         
         # Progress bar and counter - smaller, on same row as buttons
         progress_frame = ttk.Frame(run_button_frame)
-        progress_frame.grid(row=0, column=2, sticky=(tk.W, tk.E), padx=(20, 0))
+        progress_frame.grid(row=0, column=5, sticky=(tk.W, tk.E), padx=(20, 0))
         progress_frame.columnconfigure(0, weight=1)
         
         self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=150)
@@ -1499,6 +1527,126 @@ class ToolGUI:
             self.root.after(0, lambda f=audio_file: self.music_player.load_file(str(f)))
             self.current_audio_file = audio_file
             
+            # Check if we only need to process audio (skip matching if metadata and filename updates are disabled)
+            only_process_audio = (self.process_audio.get() and 
+                                 not self.update_metadata.get() and 
+                                 not self.update_filename.get())
+            
+            if only_process_audio:
+                # Skip matching - just process the audio file directly
+                print(f"\nProcessing audio file: {audio_file.name}")
+                print("(Skipping metadata/filename matching - only processing audio)")
+                
+                try:
+                    old_filename = audio_file.name
+                    old_path_resolved = audio_file.resolve()
+                    
+                    # Get output folder - required for copying files
+                    output_folder = self.output_folder_path.get().strip()
+                    if not output_folder:
+                        print(f"Error: Output folder required. Skipping {audio_file.name}")
+                        continue
+                    
+                    output_folder_path = Path(output_folder)
+                    output_folder_path.mkdir(parents=True, exist_ok=True)
+                    
+                    # Use original filename
+                    new_filename = old_filename
+                    
+                    # Determine output path - preserve subfolder structure if enabled
+                    structure = self.output_structure.get()
+                    if structure == "Preserve Subfolders":
+                        try:
+                            relative_to_root = original_file_location.relative_to(audio_folder)
+                            output_path = output_folder_path / relative_to_root.parent / new_filename
+                            output_path.parent.mkdir(parents=True, exist_ok=True)
+                        except (ValueError, AttributeError):
+                            output_path = output_folder_path / new_filename
+                    else:
+                        output_path = output_folder_path / new_filename
+                    
+                    # Handle filename conflicts
+                    counter = 1
+                    original_output_path = output_path
+                    while output_path.exists():
+                        stem = original_output_path.stem
+                        suffix = original_output_path.suffix
+                        output_path = original_output_path.parent / f"{stem} ({counter}){suffix}"
+                        counter += 1
+                    
+                    # Copy original file to output folder
+                    print(f"Copying file: {old_filename} → {output_path.name}")
+                    import shutil
+                    shutil.copy2(audio_file, output_path)
+                    print(f"Original file preserved: {audio_file.name}")
+                    print(f"Copied file created: {output_path.name}")
+                    
+                    new_path = output_path
+                    new_path_resolved = output_path.resolve()
+                    
+                    # Process audio file
+                    self.root.after(0, lambda: self.music_player.unload_file())
+                    import time
+                    time.sleep(0.3)
+                    
+                    # Handle AFLAC to FLAC conversion in filename
+                    audio_output_path = new_path
+                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                        audio_output_path = new_path.with_suffix('.flac')
+                        # Handle conflicts
+                        counter = 1
+                        original_audio_path = audio_output_path
+                        while audio_output_path.exists():
+                            stem = original_audio_path.stem
+                            suffix = original_audio_path.suffix
+                            audio_output_path = original_audio_path.parent / f"{stem} ({counter}){suffix}"
+                            counter += 1
+                    
+                    print(f"\nProcessing audio file: {new_filename}")
+                    print(f"Output will be saved to: {audio_output_path}")
+                    
+                    try:
+                        try:
+                            aufs_target_value = float(self.aufs_target.get())
+                        except (ValueError, TypeError):
+                            aufs_target_value = -13.0
+                            print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
+                        
+                        from batch_audio_processor import process_audio_file
+                        success = process_audio_file(
+                            input_path=new_path,
+                            output_path=audio_output_path,
+                            target_lufs=aufs_target_value,
+                            convert_to_flac=self.convert_aflac_to_flac.get(),
+                            convert_to_mono=self.convert_to_mono.get(),
+                            convert_to_48khz=self.convert_to_48khz.get(),
+                            use_24bit=self.use_24bit.get(),
+                            normalize=self.normalize_audio.get()
+                        )
+                        if success:
+                            print(f"✓ Audio processing completed for: {audio_output_path.name}\n")
+                        else:
+                            print(f"⚠ Audio processing failed for: {new_filename}\n")
+                    except Exception as audio_error:
+                        print(f"Error processing audio for {new_filename}: {str(audio_error)}")
+                        import traceback
+                        traceback.print_exc()
+                except Exception as e:
+                    print(f"Error processing file {audio_file.name}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                
+                # Update progress
+                file_index += 1
+                if total_files:
+                    self._current_index = file_index
+                    current_idx = file_index
+                    current_total = total_files
+                    self.root.after(0, lambda idx=current_idx, tot=current_total: self._update_progress(idx, tot))
+                
+                continue  # Skip the rest of the matching/update logic
+            
+            # Normal flow: matching and updates (metadata or filename updates are enabled)
             audio_metadata = tag_updater.get_audio_metadata(audio_file)
             
             # If file has an artist tag, try to subset catalogue to that artist
@@ -1598,38 +1746,47 @@ class ToolGUI:
                     output_folder_path = Path(output_folder)
                     output_folder_path.mkdir(parents=True, exist_ok=True)
                     
-                    # Generate new filename based on metadata (without renaming original)
-                    format_type = self.filename_format.get()
-                    tag_title = (format_type
-                        .replace("leader last", new_metadata.leader_last_name)
-                        .replace("orchestra last", new_metadata.leader_last_name)  # Backward compatibility
-                        .replace("leader", new_metadata.bandleader)
-                        .replace("orchestra", new_metadata.bandleader)  # Backward compatibility
-                        .replace("singer last", new_metadata.singer_last_name)
-                        .replace("title", new_metadata.title)
-                        .replace("year", new_metadata.year)
-                    )
-                    safe_title = slugify_filename(tag_title)
-                    new_filename = f"{safe_title}{audio_file.suffix.lower()}"
+                    # Determine filename based on update_filename toggle
+                    if self.update_filename.get():
+                        # Generate new filename based on metadata
+                        format_type = self.filename_format.get()
+                        tag_title = (format_type
+                            .replace("leader last", new_metadata.leader_last_name)
+                            .replace("orchestra last", new_metadata.leader_last_name)  # Backward compatibility
+                            .replace("leader", new_metadata.bandleader)
+                            .replace("orchestra", new_metadata.bandleader)  # Backward compatibility
+                            .replace("singer last", new_metadata.singer_last_name)
+                            .replace("title", new_metadata.title)
+                            .replace("year", new_metadata.year)
+                        )
+                        safe_title = slugify_filename(tag_title)
+                        new_filename = f"{safe_title}{audio_file.suffix.lower()}"
+                    else:
+                        # Use original filename
+                        new_filename = old_filename
                     
                     # Determine output path based on structure option
                     structure = self.output_structure.get()
                     
-                    if structure == "By Artist":
-                        # Create folder by artist name (bandleader)
+                    if structure == "By Artist" and self.update_filename.get():
+                        # Create folder by artist name (bandleader) - only if updating filename
                         artist_folder = output_folder_path / new_metadata.bandleader
                         artist_folder.mkdir(parents=True, exist_ok=True)
                         output_path = artist_folder / new_filename
                     else:
-                        # Preserve subfolder structure
-                        try:
-                            # Get relative path from the original file location to the root folder
-                            relative_to_root = original_file_location.relative_to(audio_folder)
-                            # Preserve directory structure in output (use parent directory of relative path)
-                            output_path = output_folder_path / relative_to_root.parent / new_filename
-                            output_path.parent.mkdir(parents=True, exist_ok=True)
-                        except (ValueError, AttributeError):
-                            # If relative path calculation fails, just use filename
+                        # Preserve subfolder structure or use root output folder
+                        if structure == "Preserve Subfolders":
+                            try:
+                                # Get relative path from the original file location to the root folder
+                                relative_to_root = original_file_location.relative_to(audio_folder)
+                                # Preserve directory structure in output (use parent directory of relative path)
+                                output_path = output_folder_path / relative_to_root.parent / new_filename
+                                output_path.parent.mkdir(parents=True, exist_ok=True)
+                            except (ValueError, AttributeError):
+                                # If relative path calculation fails, just use filename
+                                output_path = output_folder_path / new_filename
+                        else:
+                            # By Artist but not updating filename, or other case - use root output folder
                             output_path = output_folder_path / new_filename
                     
                     # Handle filename conflicts
@@ -1641,24 +1798,35 @@ class ToolGUI:
                         output_path = original_output_path.parent / f"{stem} ({counter}){suffix}"
                         counter += 1
                     
-                    # Copy original file to output folder with new name (original file is never modified)
-                    print(f"\nCopying file: {old_filename} → {output_path.name}")
-                    shutil.copy2(audio_file, output_path)
-                    print(f"Original file preserved: {audio_file.name}")
-                    print(f"Updated file created: {output_path.name}")
+                    # Copy original file to output folder (original file is never modified)
+                    # Only copy if we need to do something (metadata update, audio processing, or filename update)
+                    should_copy = (self.update_metadata.get() or 
+                                  self.process_audio.get() or 
+                                  self.update_filename.get())
                     
-                    new_path = output_path
-                    new_filename = output_path.name
-                    new_path_resolved = output_path.resolve()
+                    if should_copy:
+                        print(f"\nCopying file: {old_filename} → {output_path.name}")
+                        shutil.copy2(audio_file, output_path)
+                        print(f"Original file preserved: {audio_file.name}")
+                        print(f"Updated file created: {output_path.name}")
+                        
+                        new_path = output_path
+                        new_filename = output_path.name
+                        new_path_resolved = output_path.resolve()
+                        
+                        # Update undo entry with new path
+                        if 'undo_entry' in locals():
+                            undo_entry['new_path'] = Path(new_path_resolved)
+                        
+                        if self.update_filename.get():
+                            filename_changes.append((old_filename, new_filename))
+                    else:
+                        # No processing needed, skip this file
+                        print(f"\nSkipping {old_filename} - no processing options enabled")
+                        continue
                     
-                    # Update undo entry with new path
-                    if 'undo_entry' in locals():
-                        undo_entry['new_path'] = Path(new_path_resolved)
-                    
-                    filename_changes.append((old_filename, new_filename))
-                    
-                    # Check if any audio processing options are enabled
-                    process_audio = (
+                    # Check if audio processing should be done (both toggle and options must be enabled)
+                    should_process_audio = self.process_audio.get() and (
                         self.convert_aflac_to_flac.get() or
                         self.convert_to_mono.get() or
                         self.convert_to_48khz.get() or
@@ -1666,8 +1834,8 @@ class ToolGUI:
                         self.normalize_audio.get()
                     )
                     
-                    # Process audio file if any options are enabled (process the copied file)
-                    if process_audio:
+                    # Process audio file if enabled (process the copied file)
+                    if should_process_audio:
                         self.root.after(0, lambda: self.music_player.unload_file())
                         time.sleep(0.3)
                         
@@ -1726,23 +1894,26 @@ class ToolGUI:
                             import traceback
                             traceback.print_exc()
                     
-                    # Write metadata
-                    self.root.after(0, lambda: self.music_player.unload_file())
-                    time.sleep(0.2)
-                    
-                    try:
-                        tag_updater.write_metadata(new_path, new_metadata)
-                        print(f"Updated metadata for: {new_filename}")
-                    except PermissionError as pe:
-                        print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
-                        print("File may still be locked. Retrying after delay...")
-                        time.sleep(0.5)
-                        tag_updater.write_metadata(new_path, new_metadata)
-                        print(f"Successfully updated metadata for: {new_filename} on retry")
-                    except Exception as meta_error:
-                        print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
-                        import traceback
-                        traceback.print_exc()
+                    # Write metadata if enabled
+                    if self.update_metadata.get():
+                        self.root.after(0, lambda: self.music_player.unload_file())
+                        time.sleep(0.2)
+                        
+                        try:
+                            tag_updater.write_metadata(new_path, new_metadata)
+                            print(f"Updated metadata for: {new_filename}")
+                        except PermissionError as pe:
+                            print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
+                            print("File may still be locked. Retrying after delay...")
+                            time.sleep(0.5)
+                            tag_updater.write_metadata(new_path, new_metadata)
+                            print(f"Successfully updated metadata for: {new_filename} on retry")
+                        except Exception as meta_error:
+                            print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
+                            import traceback
+                            traceback.print_exc()
+                    else:
+                        print(f"Skipping metadata update for: {new_filename}")
                     
                     if old_path_resolved != new_path_resolved:
                         self.root.after(0, lambda p=new_path: self.music_player.load_file(str(p)))
