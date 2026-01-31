@@ -361,38 +361,49 @@ def apply_metadata_ffmpeg(input_path: Path, output_path: Path, metadata: Dict[st
     try:
         # First, try to copy all metadata from input file using map_metadata
         # This preserves all metadata including cover art, custom tags, etc.
-        temp_output = Path(str(output_path) + '.meta.tmp')
+        # Only try this if input_path exists and is different from output_path
+        if input_path.exists() and input_path != output_path:
+            temp_output = Path(str(output_path) + '.meta.tmp')
+            
+            cmd = [
+                'ffmpeg',
+                '-i', str(output_path),
+                '-i', str(input_path),
+                '-map', '0:a',  # Map audio from first input (output file)
+                '-map', '1:t?',  # Map all attachments (cover art, etc.) from input file if they exist
+                '-map_metadata', '1',  # Copy all metadata from second input (input file)
+                '-c:a', 'copy',  # Copy audio without re-encoding
+                '-c:v', 'copy',  # Copy any video/attachments without re-encoding
+                '-y',
+                str(temp_output)
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
+                timeout=30
+            )
+            
+            if result.returncode == 0 and temp_output.exists():
+                # Replace original with metadata-enhanced file
+                try:
+                    temp_output.replace(output_path)
+                    return True
+                except Exception as e:
+                    # If replace fails, try to copy and then delete temp
+                    try:
+                        import shutil
+                        shutil.copy2(temp_output, output_path)
+                        temp_output.unlink()
+                        return True
+                    except:
+                        pass
         
-        cmd = [
-            'ffmpeg',
-            '-i', str(output_path),
-            '-i', str(input_path),
-            '-map', '0:a',  # Map audio from first input (output file)
-            '-map', '1:t?',  # Map all attachments (cover art, etc.) from input file if they exist
-            '-map_metadata', '1',  # Copy all metadata from second input (input file)
-            '-c:a', 'copy',  # Copy audio without re-encoding
-            '-c:v', 'copy',  # Copy any video/attachments without re-encoding
-            '-disposition:v', 'attached_pic',  # Mark attachments as album art
-            '-y',
-            str(temp_output)
-        ]
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
-            timeout=30
-        )
-        
-        if result.returncode == 0 and temp_output.exists():
-            # Replace original with metadata-enhanced file
-            temp_output.replace(output_path)
-            return True
-        
-        # If copying failed, try setting metadata explicitly
+        # If copying failed or input_path doesn't exist, try setting metadata explicitly
         if metadata:
             temp_output = Path(str(output_path) + '.meta.tmp')
             cmd = [
@@ -430,14 +441,41 @@ def apply_metadata_ffmpeg(input_path: Path, output_path: Path, metadata: Dict[st
             )
             
             if result.returncode == 0 and temp_output.exists():
-                temp_output.replace(output_path)
-                return True
+                try:
+                    temp_output.replace(output_path)
+                    return True
+                except Exception as e:
+                    # If replace fails, try to copy and then delete temp
+                    try:
+                        import shutil
+                        shutil.copy2(temp_output, output_path)
+                        temp_output.unlink()
+                        return True
+                    except Exception as e2:
+                        # Clean up temp file
+                        try:
+                            if temp_output.exists():
+                                temp_output.unlink()
+                        except:
+                            pass
+                        # Log error but don't fail completely
+                        print(f"  - Warning: Could not replace output file with metadata: {str(e2)}")
             
-            # Log error if metadata setting failed
+            # Log error if metadata setting failed, but don't print full error if it's just a warning
             if result.returncode != 0:
-                print(f"  - FFmpeg metadata setting failed (return code {result.returncode})")
-                if result.stderr:
-                    print(f"  - Error: {result.stderr[:200]}")
+                # Check if it's a non-critical error (like "already exists" warnings)
+                stderr_lower = result.stderr.lower() if result.stderr else ""
+                if "already exists" in stderr_lower or "overwrite" in stderr_lower:
+                    # This is usually just a warning, try to use the file anyway
+                    if temp_output.exists():
+                        try:
+                            temp_output.replace(output_path)
+                            return True
+                        except:
+                            pass
+                # Don't print error here - will fall back to mutagen which is more reliable
+                # FFmpeg metadata errors are common and mutagen handles them better
+                pass
                     
     except Exception:
         pass
@@ -564,20 +602,21 @@ def apply_metadata(output_path: Path, input_path: Path, metadata: Dict[str, str]
     
     Args:
         output_path: Path to output audio file
-        input_path: Path to input audio file (for copying metadata)
+        input_path: Path to input audio file (for copying metadata, optional)
         metadata: Dictionary of metadata tags to apply
     
     Returns:
         True if successful, False otherwise
     """
-    # Try FFmpeg first (most reliable for copying metadata)
-    if check_ffmpeg_available():
-        if apply_metadata_ffmpeg(input_path, output_path, metadata):
-            return True
-    
-    # Fallback to mutagen
+    # Try mutagen first (more reliable and doesn't require file operations)
     if MUTAGEN_AVAILABLE:
         if apply_metadata_mutagen(output_path, metadata):
+            return True
+    
+    # Fallback to FFmpeg if mutagen failed (for formats mutagen doesn't support well)
+    # Only use FFmpeg if input_path exists and is different from output_path
+    if check_ffmpeg_available() and input_path and input_path.exists() and input_path != output_path:
+        if apply_metadata_ffmpeg(input_path, output_path, metadata):
             return True
     
     return False
