@@ -654,6 +654,93 @@ class ArtistSelectorDropdown(tk.Frame):
         self.update_count()
 
 
+class AudioProcessingDropdown(tk.Frame):
+    """A dropdown widget for audio processing options"""
+    
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, **kwargs)
+        
+        # Store selection state
+        self.is_expanded = False
+        
+        # Colors
+        self.colors = {
+            'bg': '#ffffff',
+            'border': '#e0e0e0',
+            'hover': '#f5f5f5',
+            'primary': '#007acc',
+            'text': '#333333'
+        }
+        
+        self.configure(bg=self.colors['bg'])
+        self.create_widgets()
+    
+    def create_widgets(self):
+        # Main container
+        self.main_frame = tk.Frame(self, bg=self.colors['bg'], 
+                                   highlightthickness=1,
+                                   highlightbackground=self.colors['border'])
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Header (clickable to expand/collapse)
+        self.header = tk.Frame(self.main_frame, bg=self.colors['bg'], cursor='hand2')
+        self.header.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Title label
+        self.title_label = tk.Label(self.header, 
+                                    text="Audio Processing Options",
+                                    font=('Segoe UI', 10),
+                                    bg=self.colors['bg'],
+                                    fg=self.colors['text'],
+                                    anchor='w')
+        self.title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Dropdown arrow
+        self.arrow_label = tk.Label(self.header, text="▼",
+                                    font=('Segoe UI', 8),
+                                    bg=self.colors['bg'],
+                                    fg=self.colors['text'])
+        self.arrow_label.pack(side=tk.RIGHT, padx=5)
+        
+        # Bind click events to header
+        self.header.bind('<Button-1>', lambda e: self.toggle_dropdown())
+        self.title_label.bind('<Button-1>', lambda e: self.toggle_dropdown())
+        self.arrow_label.bind('<Button-1>', lambda e: self.toggle_dropdown())
+        
+        # Dropdown content (hidden by default)
+        self.dropdown_frame = tk.Frame(self.main_frame, bg=self.colors['bg'])
+    
+    def add_checkbox(self, text, variable, row, column):
+        """Add a checkbox to the dropdown frame"""
+        cb = ttk.Checkbutton(
+            self.dropdown_frame,
+            text=text,
+            variable=variable
+        )
+        cb.grid(row=row, column=column, sticky=tk.W, padx=5, pady=2)
+        return cb
+    
+    def add_label_entry(self, text, variable, row):
+        """Add a label and entry field to the dropdown frame"""
+        label = ttk.Label(self.dropdown_frame, text=text)
+        label.grid(row=row, column=0, sticky=tk.W, padx=5, pady=5)
+        
+        entry = ttk.Entry(self.dropdown_frame, textvariable=variable, width=10)
+        entry.grid(row=row, column=1, sticky=tk.W, padx=5, pady=5)
+        return entry
+    
+    def toggle_dropdown(self):
+        """Expand or collapse the dropdown"""
+        if self.is_expanded:
+            self.dropdown_frame.pack_forget()
+            self.arrow_label.config(text="▼")
+            self.is_expanded = False
+        else:
+            self.dropdown_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+            self.arrow_label.config(text="▲")
+            self.is_expanded = True
+
+
 class ToolGUI:
     def __init__(self, root, artists=None, metadata_dict:dict={}):
         self.root = root
@@ -679,6 +766,7 @@ class ToolGUI:
         self.convert_to_48khz = tk.BooleanVar(value=False)
         self.use_24bit = tk.BooleanVar(value=False)
         self.normalize_audio = tk.BooleanVar(value=False)
+        self.aufs_target = tk.StringVar(value="-13.0")  # Default AUFS target
         
         # Output folder for processed audio files
         self.output_folder_path = tk.StringVar()
@@ -711,19 +799,21 @@ class ToolGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(8, weight=1)  # Changed to 8 for console
+        main_frame.rowconfigure(6, weight=1)  # Console row
         
-        # Folder selection and Filename format on same row
-        ttk.Label(main_frame, text="Folder:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        folder_frame = ttk.Frame(main_frame)
-        folder_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
-        folder_frame.columnconfigure(0, weight=1)
+        # Top row: Settings and Audio Processing dropdowns
+        top_row_frame = ttk.Frame(main_frame)
+        top_row_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        top_row_frame.columnconfigure(0, weight=1)
+        top_row_frame.columnconfigure(1, weight=1)
         
-        ttk.Entry(folder_frame, textvariable=self.folder_path, width=25).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
-        ttk.Button(folder_frame, text="Browse", command=self.browse_folder).grid(row=0, column=1, padx=(0, 10))
+        # Settings dropdown (left side)
+        self.settings_dropdown = AudioProcessingDropdown(top_row_frame)
+        self.settings_dropdown.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        self.settings_dropdown.title_label.config(text="Settings")
         
-        # Filename format on same row
-        ttk.Label(folder_frame, text="Format:").grid(row=0, column=2, padx=(0, 5))
+        # Filename format in settings dropdown
+        ttk.Label(self.settings_dropdown.dropdown_frame, text="Filename Format:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         format_options = [
             "title - orchestra last - singer last - year",
             "title - orchestra last - year",
@@ -735,47 +825,33 @@ class ToolGUI:
             "orchestra - title - year",
         ]
         format_dropdown = ttk.Combobox(
-            folder_frame,
+            self.settings_dropdown.dropdown_frame,
             textvariable=self.filename_format,
             values=format_options,
             state="readonly",
-            width=35
+            width=50
         )
-        format_dropdown.grid(row=0, column=3, sticky=tk.W)
-
-        # Update metadata button on separate row
-        ttk.Button(folder_frame, text="Update Metadata", command=self.update_metadata).grid(row=1, column=1, pady=5, sticky=tk.W)
+        format_dropdown.grid(row=0, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=2)
         
-        # Start year
-        ttk.Label(main_frame, text="Start Year:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.start_year, width=15).grid(row=1, column=1, sticky=tk.W, pady=5)
+        # Update metadata button in settings dropdown
+        ttk.Button(
+            self.settings_dropdown.dropdown_frame,
+            text="Update Metadata",
+            command=self.update_metadata
+        ).grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=5, pady=5)
         
-        # End year
-        ttk.Label(main_frame, text="End Year:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.end_year, width=15).grid(row=2, column=1, sticky=tk.W, pady=5)
-        
-        # Artist selector (move to row 3)
-        ttk.Label(main_frame, text="Artists:").grid(row=3, column=0, sticky=(tk.W, tk.N), pady=5)
-        self.artist_selector = ArtistSelectorDropdown(main_frame, self.artists)
-        self.artist_selector.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=5)
-        
-        # Virtual DJ Database Linking (row 4)
-        vdj_frame = ttk.LabelFrame(main_frame, text="Virtual DJ Database", padding="5")
-        vdj_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        vdj_frame.columnconfigure(1, weight=1)
-        
-        # Link Database toggle
-        link_checkbox = ttk.Checkbutton(
-            vdj_frame,
-            text="Link Database",
+        # Virtual DJ Database Linking in settings dropdown
+        vdj_checkbox = ttk.Checkbutton(
+            self.settings_dropdown.dropdown_frame,
+            text="Link Virtual DJ Database",
             variable=self.link_database,
             command=self.on_link_database_toggle
         )
-        link_checkbox.grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        vdj_checkbox.grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
         
-        # Database path frame
-        db_path_frame = ttk.Frame(vdj_frame)
-        db_path_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
+        # Database path frame in settings dropdown
+        db_path_frame = ttk.Frame(self.settings_dropdown.dropdown_frame)
+        db_path_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
         db_path_frame.columnconfigure(0, weight=1)
         
         ttk.Entry(db_path_frame, textvariable=self.vdj_database_path, state='readonly').grid(
@@ -787,74 +863,80 @@ class ToolGUI:
             command=self.browse_vdj_database
         ).grid(row=0, column=1, padx=(0, 5))
         
-        # Audio Processing Options (row 5)
-        audio_frame = ttk.LabelFrame(main_frame, text="Audio Processing Options", padding="5")
-        audio_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
-        # Create checkboxes in a grid layout
-        ttk.Checkbutton(
-            audio_frame,
-            text="Convert AFLAC to FLAC",
-            variable=self.convert_aflac_to_flac
-        ).grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        # Audio Processing dropdown (right side)
+        self.audio_processing_dropdown = AudioProcessingDropdown(top_row_frame)
+        self.audio_processing_dropdown.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 0))
+        self.audio_processing_dropdown.title_label.config(text="Audio Processing Options")
         
-        ttk.Checkbutton(
-            audio_frame,
-            text="Sum to Mono",
-            variable=self.convert_to_mono
-        ).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Checkbutton(
-            audio_frame,
-            text="Convert to 48kHz",
-            variable=self.convert_to_48khz
-        ).grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Checkbutton(
-            audio_frame,
-            text="Use 24-bit Depth",
-            variable=self.use_24bit
-        ).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Checkbutton(
-            audio_frame,
-            text="Normalize Audio",
-            variable=self.normalize_audio
-        ).grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
-        
-        # Output folder for processed files (row 3 in audio_frame)
-        output_folder_label = ttk.Label(audio_frame, text="Output Folder:")
-        output_folder_label.grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
-        
-        output_folder_entry_frame = ttk.Frame(audio_frame)
-        output_folder_entry_frame.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
-        output_folder_entry_frame.columnconfigure(0, weight=1)
-        
-        ttk.Entry(output_folder_entry_frame, textvariable=self.output_folder_path, width=30).grid(
-            row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5)
+        # Add checkboxes to audio processing dropdown
+        self.audio_processing_dropdown.add_checkbox(
+            "Convert AFLAC to FLAC", self.convert_aflac_to_flac, 0, 0
         )
-        ttk.Button(
-            output_folder_entry_frame,
-            text="Browse",
-            command=self.browse_output_folder
-        ).grid(row=0, column=1)
+        self.audio_processing_dropdown.add_checkbox(
+            "Sum to Mono", self.convert_to_mono, 0, 1
+        )
+        self.audio_processing_dropdown.add_checkbox(
+            "Convert to 48kHz", self.convert_to_48khz, 1, 0
+        )
+        self.audio_processing_dropdown.add_checkbox(
+            "Use 24-bit Depth", self.use_24bit, 1, 1
+        )
+        self.audio_processing_dropdown.add_checkbox(
+            "Normalize Audio", self.normalize_audio, 2, 0
+        )
         
-        # Music player (row 6)
-        ttk.Label(main_frame, text="Player:").grid(row=6, column=0, sticky=(tk.W, tk.N), pady=5)
+        # AUFS target input in audio processing dropdown
+        ttk.Label(self.audio_processing_dropdown.dropdown_frame, text="AUFS Target:").grid(row=2, column=1, sticky=tk.W, padx=(5, 5), pady=2)
+        ttk.Entry(self.audio_processing_dropdown.dropdown_frame, textvariable=self.aufs_target, width=10).grid(row=2, column=2, sticky=tk.W, padx=5, pady=2)
+        
+        # Folder selection with output folder on same row (row 1)
+        ttk.Label(main_frame, text="Input Folder:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        folder_frame = ttk.Frame(main_frame)
+        folder_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5)
+        folder_frame.columnconfigure(0, weight=1)
+        folder_frame.columnconfigure(3, weight=1)
+        
+        # Input folder
+        ttk.Entry(folder_frame, textvariable=self.folder_path, width=25).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        ttk.Button(folder_frame, text="Browse", command=self.browse_folder).grid(row=0, column=1, padx=(0, 10))
+        
+        # Output folder on same row
+        ttk.Label(folder_frame, text="Output:").grid(row=0, column=2, padx=(0, 5))
+        ttk.Entry(folder_frame, textvariable=self.output_folder_path, width=25).grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 5))
+        ttk.Button(folder_frame, text="Browse", command=self.browse_output_folder).grid(row=0, column=4)
+        
+        # Start year and End year in main area (row 2)
+        ttk.Label(main_frame, text="Start Year:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        year_frame = ttk.Frame(main_frame)
+        year_frame.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5)
+        
+        ttk.Entry(year_frame, textvariable=self.start_year, width=15).grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        ttk.Label(year_frame, text="End Year:").grid(row=0, column=1, sticky=tk.W, padx=(0, 5))
+        ttk.Entry(year_frame, textvariable=self.end_year, width=15).grid(row=0, column=2, sticky=tk.W)
+        
+        # Artist selector (row 3)
+        ttk.Label(main_frame, text="Artists:").grid(row=3, column=0, sticky=(tk.W, tk.N), pady=5)
+        self.artist_selector = ArtistSelectorDropdown(main_frame, self.artists)
+        self.artist_selector.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=5)
+        
         player_frame = ttk.LabelFrame(main_frame, text="Music Player", padding="5")
-        player_frame.grid(row=6, column=1, sticky=(tk.W, tk.E), pady=5)
+        player_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=5)
         player_frame.columnconfigure(0, weight=1)
         
         self.music_player = MusicPlayer(player_frame)
         self.music_player.pack(fill=tk.BOTH, expand=True)
         
-        # Run button (row 7)
-        self.run_button = ttk.Button(main_frame, text="Run Tool", command=self.run_tag_updater)
-        self.run_button.grid(row=7, column=0, columnspan=2, pady=10, sticky=tk.W)
+        # Run button (row 5) - centered
+        run_button_frame = ttk.Frame(main_frame)
+        run_button_frame.grid(row=5, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
+        run_button_frame.columnconfigure(0, weight=1)
         
-        # Console output area (row 8)
+        self.run_button = ttk.Button(run_button_frame, text="Run TigerTag", command=self.run_tag_updater)
+        self.run_button.grid(row=0, column=0)
+        
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
-        console_frame.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        console_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         console_frame.columnconfigure(0, weight=1)
         console_frame.rowconfigure(0, weight=1)
         
@@ -885,11 +967,10 @@ class ToolGUI:
         self.console.tag_config("magenta", foreground="#FF00FF")
         self.console.tag_config("bold", font=("Consolas", 10, "bold"))
         
-        # Input area (hidden by default)
+        # Input area (visible by default)
         self.input_frame = ttk.Frame(main_frame)
-        self.input_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)  # Changed to row 9
+        self.input_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         self.input_frame.columnconfigure(1, weight=1)
-        self.input_frame.grid_remove()  # Hide initially
         
         ttk.Label(self.input_frame, text="Input:").grid(row=0, column=0, sticky=tk.W)
         self.input_entry = ttk.Entry(self.input_frame, textvariable=self.input_var)
@@ -1102,11 +1183,18 @@ class ToolGUI:
                                     print(f"\nProcessing audio file in place: {new_filename}")
                                 
                                 try:
+                                    # Get AUFS target value
+                                    try:
+                                        aufs_target_value = float(self.aufs_target.get())
+                                    except (ValueError, TypeError):
+                                        aufs_target_value = -13.0  # Default if invalid
+                                        print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
+                                    
                                     # Process audio file
                                     success = process_audio_file(
                                         input_path=new_path,
                                         output_path=output_path,
-                                        target_lufs=-13.0,
+                                        target_lufs=aufs_target_value,
                                         convert_to_flac=self.convert_aflac_to_flac.get(),
                                         convert_to_mono=self.convert_to_mono.get(),
                                         convert_to_48khz=self.convert_to_48khz.get(),
