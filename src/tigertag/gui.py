@@ -779,6 +779,9 @@ class ToolGUI:
         self.output_folder_path = tk.StringVar()
         self.output_structure = tk.StringVar(value="preserve")  # "preserve" or "by_artist"
         
+        # Undo history - stack of operations that can be undone
+        self.undo_history = []  # List of dicts with: original_path, new_path, chosen_idx, catalogue, audio_folder
+        
         # Load saved config
         self.load_vdj_config()
         
@@ -952,13 +955,17 @@ class ToolGUI:
         self.music_player = MusicPlayer(player_frame)
         self.music_player.pack(fill=tk.BOTH, expand=True)
         
-        # Run button (row 5) - centered
+        # Run button and Undo button (row 5) - centered
         run_button_frame = ttk.Frame(main_frame)
         run_button_frame.grid(row=5, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
         run_button_frame.columnconfigure(0, weight=1)
         
         self.run_button = ttk.Button(run_button_frame, text="Run TigerTag", command=self.run_tag_updater)
         self.run_button.grid(row=0, column=0)
+        
+        # Undo button
+        self.undo_button = ttk.Button(run_button_frame, text="Undo Last", command=self.undo_last_operation, state='disabled')
+        self.undo_button.grid(row=0, column=1, padx=(10, 0))
         
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
         console_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
