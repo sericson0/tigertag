@@ -13,6 +13,8 @@ dependencies = [
     "pyarrow>=22.0.0",
     "rapidfuzz>=3.14.3",
     "pygame>=2.5.0",
+    "pydub>=0.25.1",
+    "audioop-lts>=0.2.2",
 ]
 
 [build-system]
