@@ -680,6 +680,9 @@ class ToolGUI:
         self.use_24bit = tk.BooleanVar(value=False)
         self.normalize_audio = tk.BooleanVar(value=False)
         
+        # Output folder for processed audio files
+        self.output_folder_path = tk.StringVar()
+        
         # Load saved config
         self.load_vdj_config()
         
@@ -819,6 +822,23 @@ class ToolGUI:
             variable=self.normalize_audio
         ).grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         
+        # Output folder for processed files (row 3 in audio_frame)
+        output_folder_label = ttk.Label(audio_frame, text="Output Folder:")
+        output_folder_label.grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
+        
+        output_folder_entry_frame = ttk.Frame(audio_frame)
+        output_folder_entry_frame.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        output_folder_entry_frame.columnconfigure(0, weight=1)
+        
+        ttk.Entry(output_folder_entry_frame, textvariable=self.output_folder_path, width=30).grid(
+            row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5)
+        )
+        ttk.Button(
+            output_folder_entry_frame,
+            text="Browse",
+            command=self.browse_output_folder
+        ).grid(row=0, column=1)
+        
         # Music player (row 6)
         ttk.Label(main_frame, text="Player:").grid(row=6, column=0, sticky=(tk.W, tk.N), pady=5)
         player_frame = ttk.LabelFrame(main_frame, text="Music Player", padding="5")
@@ -899,6 +919,12 @@ class ToolGUI:
         if file_path:
             self.vdj_database_path.set(file_path)
             config_handler.set_vdj_database_path(file_path)
+    
+    def browse_output_folder(self):
+        """Browse for output folder for processed audio files."""
+        folder = filedialog.askdirectory(title="Select Output Folder for Processed Audio Files")
+        if folder:
+            self.output_folder_path.set(folder)
     
     def update_metadata(self):
         print("Updating Metadata")
@@ -1051,12 +1077,35 @@ class ToolGUI:
                                 self.root.after(0, lambda: self.music_player.unload_file())
                                 time.sleep(0.3)  # Wait to ensure file is fully released
                                 
-                                print(f"\nProcessing audio file: {new_filename}")
+                                # Get output folder path
+                                output_folder = self.output_folder_path.get().strip()
+                                
+                                # Determine output path
+                                if output_folder:
+                                    # Create output folder if it doesn't exist
+                                    output_folder_path = Path(output_folder)
+                                    output_folder_path.mkdir(parents=True, exist_ok=True)
+                                    
+                                    # Determine output file path in output folder
+                                    # Handle AFLAC to FLAC conversion in filename
+                                    output_filename = new_filename
+                                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                                        output_filename = new_path.stem + '.flac'
+                                    
+                                    output_path = output_folder_path / output_filename
+                                    
+                                    print(f"\nProcessing audio file: {new_filename}")
+                                    print(f"Output will be saved to: {output_path}")
+                                else:
+                                    # No output folder specified, process in place
+                                    output_path = new_path
+                                    print(f"\nProcessing audio file in place: {new_filename}")
+                                
                                 try:
-                                    # Process audio in place (overwrite the file)
+                                    # Process audio file
                                     success = process_audio_file(
                                         input_path=new_path,
-                                        output_path=new_path,
+                                        output_path=output_path,
                                         target_lufs=-13.0,
                                         convert_to_flac=self.convert_aflac_to_flac.get(),
                                         convert_to_mono=self.convert_to_mono.get(),
@@ -1066,6 +1115,19 @@ class ToolGUI:
                                     )
                                     if success:
                                         print(f"✓ Audio processing completed for: {new_filename}\n")
+                                        
+                                        # Update path references if output folder was used
+                                        if output_folder and output_path.exists():
+                                            new_path = output_path
+                                            new_filename = output_path.name
+                                            new_path_resolved = output_path.resolve()
+                                            
+                                            # Update filename changes to reflect output location
+                                            # Find and update the entry in filename_changes
+                                            for i, (old, new) in enumerate(filename_changes):
+                                                if new == new_filename or (self.convert_aflac_to_flac.get() and new.endswith('.aflac') and new_filename.endswith('.flac')):
+                                                    filename_changes[i] = (old, new_filename)
+                                                    break
                                     else:
                                         print(f"⚠ Audio processing failed for: {new_filename}\n")
                                 except Exception as audio_error:
@@ -1073,16 +1135,17 @@ class ToolGUI:
                                     import traceback
                                     traceback.print_exc()
                                 
-                                # Update path if extension changed (e.g., AFLAC to FLAC)
+                                # Update path if extension changed (e.g., AFLAC to FLAC) and no output folder
                                 # The batch_audio_processor handles the conversion and file deletion
-                                if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                                if not output_folder and self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
                                     # Check if file with .flac extension exists (processor created it)
                                     flac_path = new_path.with_suffix('.flac')
                                     if flac_path.exists():
                                         new_path = flac_path
                                         new_filename = new_path.name
+                                        new_path_resolved = new_path.resolve()
                                         # Update filename changes if needed
-                                        if old_path_resolved != new_path.resolve():
+                                        if old_path_resolved != new_path_resolved:
                                             # Find and update the entry in filename_changes
                                             for i, (old, new) in enumerate(filename_changes):
                                                 if new.endswith('.aflac'):
@@ -1093,7 +1156,7 @@ class ToolGUI:
                             self.root.after(0, lambda: self.music_player.unload_file())
                             time.sleep(0.2)  # Additional delay before metadata write
                             
-                            # Write metadata to the file
+                            # Write metadata to the file (use new_path which may point to output folder)
                             try:
                                 tag_updater.write_metadata(new_path, new_metadata)
                                 print(f"Updated metadata for: {new_filename}")

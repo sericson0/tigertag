@@ -920,13 +920,19 @@ def process_audio_file(
                 print(f"  - Warning: Could not preserve album art")
         
         # If we converted AFLAC to FLAC and the original file still exists, delete it
+        # Only delete if processing in place (input and output are the same location)
         if convert_to_flac and input_path.suffix.lower() == '.aflac':
             if input_path.exists() and input_path != output_path:
-                try:
-                    input_path.unlink()
-                    print(f"  - Removed original AFLAC file")
-                except Exception as e:
-                    print(f"  - Warning: Could not remove original AFLAC file: {str(e)}")
+                # Only delete if output is in the same directory (in-place processing)
+                if input_path.parent == output_path.parent:
+                    try:
+                        input_path.unlink()
+                        print(f"  - Removed original AFLAC file")
+                    except Exception as e:
+                        print(f"  - Warning: Could not remove original AFLAC file: {str(e)}")
+                else:
+                    # Output is in a different location, keep original file
+                    print(f"  - Original AFLAC file preserved (output in different folder)")
         
         print(f"  ✓ Successfully processed: {output_path.name}\n")
         return True
