@@ -2496,10 +2496,18 @@ class ToolGUI:
                             .replace("year", new_metadata.year)
                         )
                         safe_title = slugify_filename(tag_title)
-                        new_filename = f"{safe_title}{audio_file.suffix.lower()}"
+                        # Determine file extension - use .flac if converting lossless to FLAC
+                        file_ext = audio_file.suffix.lower()
+                        if self.convert_aflac_to_flac.get() and file_ext in ('.aflac', '.aiff', '.aif'):
+                            file_ext = '.flac'
+                        new_filename = f"{safe_title}{file_ext}"
                     else:
-                        # Use original filename
+                        # Use original filename, but update extension if converting to FLAC
                         new_filename = old_filename
+                        if self.convert_aflac_to_flac.get() and audio_file.suffix.lower() in ('.aflac', '.aiff', '.aif'):
+                            new_filename = audio_file.stem + '.flac'
+                        if self.convert_aflac_to_flac.get() and audio_file.suffix.lower() in ('.aflac', '.aiff', '.aif'):
+                            new_filename = audio_file.stem + '.flac'
                     
                     # Determine output path based on structure option
                     structure = self.output_structure.get()
@@ -2561,13 +2569,21 @@ class ToolGUI:
                         print(f"\nSkipping {old_filename} - no processing options enabled")
                         continue
                     
-                    # Check if audio processing should be done (both toggle and options must be enabled)
+                    # Check if audio processing should be done
+                    # Process if the toggle is on AND either:
+                    # 1. Any audio processing option is enabled, OR
+                    # 2. File needs conversion (lossless to FLAC) - this requires processing
+                    file_needs_conversion = (self.convert_aflac_to_flac.get() and 
+                                           audio_file.suffix.lower() in ('.aflac', '.aiff', '.aif'))
                     should_process_audio = self.process_audio.get() and (
                         self.convert_aflac_to_flac.get() or
                         self.convert_to_mono.get() or
                         self.convert_to_48khz.get() or
                         self.use_24bit.get() or
-                        self.normalize_audio.get()
+                        self.normalize_audio.get() or
+                        self.enable_denoise.get() or
+                        (self.enable_vst3.get() and self.vst3_plugins) or
+                        file_needs_conversion  # Always process if conversion is needed
                     )
                     
                     # Process audio file if enabled (process the copied file)
@@ -2597,6 +2613,18 @@ class ToolGUI:
                             except (ValueError, TypeError):
                                 aufs_target_value = -13.0
                                 print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
+                            
+                            # Get denoising parameters
+                            try:
+                                noise_threshold_value = float(self.noise_threshold.get())
+                            except (ValueError, TypeError):
+                                noise_threshold_value = 0.15
+                            
+                            try:
+                                prop_decrease_value = float(self.prop_decrease.get())
+                                prop_decrease_value = max(0.0, min(1.0, prop_decrease_value))  # Clamp to 0-1
+                            except (ValueError, TypeError):
+                                prop_decrease_value = 0.5
                             
                             success = process_audio_file(
                                 input_path=new_path,
@@ -2645,15 +2673,19 @@ class ToolGUI:
                         self.root.after(0, lambda: self.music_player.unload_file())
                         time.sleep(0.2)
                         
+                        # Determine the file to write metadata to
+                        # If audio was processed and converted, use the processed file (which may be FLAC)
+                        metadata_file = new_path_resolved if 'new_path_resolved' in locals() else new_path
+                        
                         try:
-                            tag_updater.write_metadata(new_path, new_metadata)
-                            print(f"Updated metadata for: {new_filename}")
+                            tag_updater.write_metadata(metadata_file, new_metadata)
+                            print(f"Updated metadata for: {Path(metadata_file).name}")
                         except PermissionError as pe:
-                            print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
+                            print(f"Permission denied writing metadata for {Path(metadata_file).name}: {str(pe)}")
                             print("File may still be locked. Retrying after delay...")
                             time.sleep(0.5)
-                            tag_updater.write_metadata(new_path, new_metadata)
-                            print(f"Successfully updated metadata for: {new_filename} on retry")
+                            tag_updater.write_metadata(metadata_file, new_metadata)
+                            print(f"Successfully updated metadata for: {Path(metadata_file).name} on retry")
                         except Exception as meta_error:
                             print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
                             import traceback

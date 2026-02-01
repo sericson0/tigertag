@@ -219,8 +219,8 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
         
         file_ext = input_path.suffix.lower()
         
-        if file_ext == '.mp3':
-            # MP3 uses APIC frames in ID3 tags
+        if file_ext == '.mp3' or file_ext in ['.aif', '.aiff', '.aifc']:
+            # MP3 and AIFF use APIC frames in ID3 tags
             from mutagen.id3 import APIC
             if 'APIC:' in audio_file:
                 apic = audio_file['APIC:'].data
