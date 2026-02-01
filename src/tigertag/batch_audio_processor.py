@@ -397,7 +397,7 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
             # Album art can be stored in multiple locations in M4A files
             print(f"  - Attempting to extract album art from M4A/MP4 file: {input_path.name}")
             try:
-                from mutagen.mp4 import MP4, MP4FreeForm
+                from mutagen.mp4 import MP4, MP4FreeForm, MP4Cover
                 
                 # Method 1: Use MP4 class directly (most reliable)
                 mp4_file = None
@@ -417,8 +417,30 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
                                 # Try different ways to extract the image data
                                 art_data = None
                                 
+                                # If it's an MP4Cover object (most common for covr atoms)
+                                if isinstance(covr_item, MP4Cover):
+                                    # MP4Cover objects have a .data attribute with the image bytes
+                                    if hasattr(covr_item, 'data'):
+                                        try:
+                                            art_data = covr_item.data
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from MP4Cover.data attribute ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4Cover.data: {e}")
+                                    
+                                    # Try bytes conversion
+                                    if not art_data:
+                                        try:
+                                            art_data = bytes(covr_item)
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from bytes() conversion of MP4Cover ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error converting MP4Cover to bytes: {e}")
+                                
                                 # If it's an MP4FreeForm object, access the data
-                                if isinstance(covr_item, MP4FreeForm):
+                                elif isinstance(covr_item, MP4FreeForm):
                                     # Try accessing .data attribute
                                     if hasattr(covr_item, 'data'):
                                         try:
@@ -578,6 +600,26 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
                                     if len(art_data) > 0:
                                         print(f"  - ✓ covr item is bytes ({len(art_data)} bytes)")
                                         return art_data
+                                # If it's MP4Cover, extract data
+                                if isinstance(covr_item, MP4Cover):
+                                    if hasattr(covr_item, 'data'):
+                                        try:
+                                            art_data = covr_item.data
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from MP4Cover.data (MutagenFile) ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4Cover.data: {e}")
+                                    
+                                    if not art_data:
+                                        try:
+                                            art_data = bytes(covr_item)
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from bytes() conversion of MP4Cover (MutagenFile) ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error converting MP4Cover to bytes: {e}")
+                                
                                 # If it's MP4FreeForm, extract data
                                 elif isinstance(covr_item, MP4FreeForm):
                                     if hasattr(covr_item, 'data'):
