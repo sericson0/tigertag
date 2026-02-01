@@ -217,6 +217,7 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
         
         # Handle AIFF files explicitly (they use ID3 tags but need special handling)
         if file_ext in ['.aif', '.aiff', '.aifc']:
+            print(f"  - Attempting to extract album art from AIFF file: {input_path.name}")
             # Try multiple methods to extract album art from AIFF
             methods = []
             
@@ -225,11 +226,12 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
                 from mutagen.id3 import ID3, ID3NoHeaderError, APIC
                 try:
                     id3_tags = ID3(str(input_path))
+                    print(f"  - Successfully loaded ID3 tags using ID3 class")
                     methods.append(("ID3 class", id3_tags))
                 except ID3NoHeaderError:
-                    print(f"  - AIFF file has no ID3 tags")
+                    print(f"  - AIFF file has no ID3 tags (ID3NoHeaderError)")
                 except Exception as e:
-                    print(f"  - Error loading ID3 tags from AIFF: {e}")
+                    print(f"  - Error loading ID3 tags from AIFF using ID3 class: {e}")
             except Exception as e:
                 print(f"  - Could not import ID3: {e}")
             
@@ -238,53 +240,127 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
                 from mutagen.aiff import AIFF
                 audio_file = AIFF(str(input_path))
                 if audio_file.tags is not None:
+                    print(f"  - Successfully loaded ID3 tags using AIFF class")
                     methods.append(("AIFF class", audio_file.tags))
+                else:
+                    print(f"  - AIFF class loaded but file has no tags")
             except Exception as e:
                 print(f"  - Could not load AIFF class: {e}")
             
-            # Method 3: Use MutagenFile as fallback
+            # Method 3: Use MutagenFile as fallback (less reliable for AIFF)
             try:
                 audio_file_mf = MutagenFile(str(input_path))
                 if audio_file_mf is not None:
+                    print(f"  - Successfully loaded using MutagenFile")
                     methods.append(("MutagenFile", audio_file_mf))
             except Exception as e:
                 print(f"  - Could not load with MutagenFile: {e}")
             
+            if not methods:
+                print(f"  - ✗ Could not load ID3 tags using any method")
+                return None
+            
             # Try each method to find APIC frames
             for method_name, tags in methods:
                 try:
-                    # Look for APIC frames - they can have various keys like 'APIC:', 'APIC:cover', etc.
+                    # Debug: Print all available keys
+                    all_keys = list(tags.keys())
+                    print(f"  - [{method_name}] Available ID3 frame keys: {all_keys}")
+                    
+                    # Look for APIC frames - they can have various keys
+                    # Try multiple approaches to find APIC frames
                     apic_keys = []
-                    for key in tags.keys():
+                    
+                    # Method 1: Check keys that start with 'APIC'
+                    for key in all_keys:
                         if key.startswith('APIC'):
                             apic_keys.append(key)
                     
+                    # Method 2: Check for 'APIC:' specifically (common format)
+                    if 'APIC:' in all_keys:
+                        if 'APIC:' not in apic_keys:
+                            apic_keys.append('APIC:')
+                    
+                    # Method 3: Check for APIC frames using getall (for multiple frames)
+                    try:
+                        if hasattr(tags, 'getall'):
+                            all_apic = tags.getall('APIC')
+                            if all_apic:
+                                apic_keys.extend(['APIC'] * len(all_apic))
+                    except:
+                        pass
+                    
+                    # Method 4: Try direct access with different key formats
+                    test_keys = ['APIC', 'APIC:', 'APIC:cover', 'APIC:front cover', 'APIC:Front Cover']
+                    for test_key in test_keys:
+                        try:
+                            if test_key in tags or (hasattr(tags, 'get') and tags.get(test_key) is not None):
+                                if test_key not in apic_keys:
+                                    apic_keys.append(test_key)
+                        except:
+                            pass
+                    
                     if apic_keys:
-                        print(f"  - Found {len(apic_keys)} APIC frame(s) in AIFF file using {method_name}")
+                        print(f"  - Found {len(apic_keys)} APIC frame(s) in AIFF file using {method_name}: {apic_keys}")
                         # Use the first APIC frame found (usually the cover)
-                        apic_frame = tags[apic_keys[0]]
+                        apic_key = apic_keys[0]
+                        apic_frame = tags[apic_key]
+                        
+                        print(f"  - APIC frame type: {type(apic_frame)}")
+                        print(f"  - APIC frame attributes: {dir(apic_frame)}")
                         
                         # Try different ways to access the data
                         art_data = None
+                        
+                        # Try direct data attribute
                         if hasattr(apic_frame, 'data'):
-                            art_data = apic_frame.data
-                        elif hasattr(apic_frame, '_data'):
-                            art_data = apic_frame._data
-                        elif isinstance(apic_frame, bytes):
+                            try:
+                                art_data = apic_frame.data
+                                print(f"  - Got data from .data attribute")
+                            except Exception as e:
+                                print(f"  - Error accessing .data: {e}")
+                        
+                        # Try _data attribute
+                        if not art_data and hasattr(apic_frame, '_data'):
+                            try:
+                                art_data = apic_frame._data
+                                print(f"  - Got data from ._data attribute")
+                            except Exception as e:
+                                print(f"  - Error accessing ._data: {e}")
+                        
+                        # Try if frame is already bytes
+                        if not art_data and isinstance(apic_frame, bytes):
                             art_data = apic_frame
-                        elif hasattr(apic_frame, '__bytes__'):
-                            art_data = bytes(apic_frame)
+                            print(f"  - Frame is already bytes")
+                        
+                        # Try bytes conversion
+                        if not art_data and hasattr(apic_frame, '__bytes__'):
+                            try:
+                                art_data = bytes(apic_frame)
+                                print(f"  - Got data from bytes() conversion")
+                            except Exception as e:
+                                print(f"  - Error converting to bytes: {e}")
+                        
+                        # Try accessing through get_picture or similar methods
+                        if not art_data and hasattr(apic_frame, 'get_picture'):
+                            try:
+                                art_data = apic_frame.get_picture()
+                                print(f"  - Got data from get_picture()")
+                            except Exception as e:
+                                print(f"  - Error calling get_picture(): {e}")
                         
                         if art_data and len(art_data) > 0:
-                            print(f"  - Extracted album art from APIC frame '{apic_keys[0]}' using {method_name} ({len(art_data)} bytes)")
+                            print(f"  - ✓ Extracted album art from APIC frame '{apic_key}' using {method_name} ({len(art_data)} bytes)")
                             return art_data
                         else:
-                            print(f"  - APIC frame '{apic_keys[0]}' found but could not extract data")
+                            print(f"  - ✗ APIC frame '{apic_key}' found but could not extract data (art_data is {type(art_data)}, length: {len(art_data) if art_data else 0})")
                     else:
                         if method_name == methods[-1][0]:  # Only print on last method
-                            print(f"  - No APIC frames found in AIFF file. Available frames: {list(tags.keys())[:10]}")
+                            print(f"  - No APIC frames found in AIFF file. Available frames: {all_keys}")
                 except Exception as e:
                     print(f"  - Error extracting album art using {method_name}: {e}")
+                    import traceback
+                    traceback.print_exc()
                     continue
             
             return None
@@ -1325,8 +1401,34 @@ def process_audio_file(
         else:
             print(f"  - No album art found in input file")
         
-        # Handle lossless to FLAC conversion if requested (AFLAC and AIFF/AIF)
+        # Handle lossless to FLAC conversion if requested (AFLAC, AIFF/AIF, and ALAC M4A)
         file_ext = input_path.suffix.lower()
+        
+        # Check if M4A file is ALAC (lossless) - convert to FLAC
+        is_alac = False
+        if file_ext == '.m4a':
+            try:
+                # Use ffprobe to check codec
+                probe_cmd = [
+                    'ffprobe', '-v', 'error', '-select_streams', 'a:0',
+                    '-show_entries', 'stream=codec_name',
+                    '-of', 'default=noprint_wrappers=1:nokey=1',
+                    str(input_path)
+                ]
+                probe_result = subprocess.run(
+                    probe_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                codec_name = probe_result.stdout.strip().lower() if probe_result.returncode == 0 else None
+                if codec_name == 'alac':
+                    is_alac = True
+                    print(f"  - Detected ALAC (lossless) M4A file - will convert to FLAC")
+            except Exception as e:
+                print(f"  - Could not detect M4A codec (assuming AAC): {e}")
+        
         if convert_to_flac and file_ext in ('.aflac', '.aiff', '.aif'):
             # Convert lossless formats to FLAC
             if file_ext == '.aflac':
@@ -1336,6 +1438,13 @@ def process_audio_file(
             file_ext = '.flac'
             # Update output path to use .flac extension
             if output_path.suffix.lower() in ('.aflac', '.aiff', '.aif', '.flac'):
+                output_path = output_path.with_suffix('.flac')
+        elif is_alac:
+            # Convert ALAC M4A to FLAC
+            print(f"  - Converting ALAC M4A to FLAC")
+            file_ext = '.flac'
+            # Update output path to use .flac extension
+            if output_path.suffix.lower() in ('.m4a', '.flac'):
                 output_path = output_path.with_suffix('.flac')
         
         # Check if FFmpeg is required for this file type
@@ -1441,6 +1550,9 @@ def process_audio_file(
         original_ext = input_path.suffix.lower()
         if convert_to_flac and original_ext in ('.aflac', '.aiff', '.aif'):
             original_ext = '.flac'
+        elif is_alac:
+            # ALAC M4A files are converted to FLAC
+            original_ext = '.flac'
         if not original_ext:
             original_ext = '.wav'  # Default to wav if no extension
         
@@ -1511,7 +1623,20 @@ def process_audio_file(
                         else:
                             ffmpeg_cmd.extend(['-codec:a', 'flac', '-compression_level', '12'])
                     elif original_ext == '.m4a' or original_ext == '.aac':
-                        ffmpeg_cmd.extend(['-codec:a', 'aac', '-b:a', '320k'])
+                        # Check if this was an ALAC file (converted to FLAC)
+                        if is_alac or original_ext == '.flac':
+                            # ALAC files are converted to FLAC (handled earlier via is_alac flag)
+                            # Use FLAC encoding instead of ALAC
+                            if use_24bit:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-sample_fmt', 's32', '-compression_level', '12'])
+                            else:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-compression_level', '12'])
+                            print(f"  - Encoding ALAC as FLAC")
+                        else:
+                            # Use high-quality AAC VBR (quality 1 = very high quality, ~256-320k average)
+                            # VBR adapts to content better than fixed bitrate and preserves quality
+                            ffmpeg_cmd.extend(['-codec:a', 'aac', '-q:a', '1'])
+                            print(f"  - Using high-quality AAC encoding (VBR, quality 1)")
                     elif original_ext == '.ogg':
                         ffmpeg_cmd.extend(['-codec:a', 'libvorbis', '-q:a', '5'])
                     elif original_ext == '.wma':
