@@ -18,7 +18,12 @@
     "auto_select": true,
     "year_match": true,
     "artist_format": "leader_last - singer_last",
-    "selected_artists": [
-        "Anibal Troilo"
+    "selected_artists": [],
+    "enable_vst3": false,
+    "vst3_plugins": [
+        "C:\\Program Files (x86)\\Common Files\\VST3\\TDR Nova.vst3"
+    ],
+    "vst3_parameters": [
+        {}
     ]
 }

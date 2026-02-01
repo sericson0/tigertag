@@ -1227,17 +1227,17 @@ def process_audio_file(
         if album_art:
             print(f"  - Extracted album art ({len(album_art)} bytes)")
         
-        # Handle lossless to FLAC conversion if requested (AFLAC and AIFF)
+        # Handle lossless to FLAC conversion if requested (AFLAC and AIFF/AIF)
         file_ext = input_path.suffix.lower()
-        if convert_to_flac and file_ext in ('.aflac', '.aiff'):
+        if convert_to_flac and file_ext in ('.aflac', '.aiff', '.aif'):
             # Convert lossless formats to FLAC
             if file_ext == '.aflac':
                 print(f"  - Converting AFLAC to FLAC")
-            elif file_ext == '.aiff':
+            elif file_ext in ('.aiff', '.aif'):
                 print(f"  - Converting AIFF to FLAC")
             file_ext = '.flac'
             # Update output path to use .flac extension
-            if output_path.suffix.lower() in ('.aflac', '.aiff', '.flac'):
+            if output_path.suffix.lower() in ('.aflac', '.aiff', '.aif', '.flac'):
                 output_path = output_path.with_suffix('.flac')
         
         # Check if FFmpeg is required for this file type
@@ -1341,7 +1341,7 @@ def process_audio_file(
         
         # Get original file extension and preserve it (or use FLAC if converted)
         original_ext = input_path.suffix.lower()
-        if convert_to_flac and original_ext in ('.aflac', '.aiff'):
+        if convert_to_flac and original_ext in ('.aflac', '.aiff', '.aif'):
             original_ext = '.flac'
         if not original_ext:
             original_ext = '.wav'  # Default to wav if no extension
@@ -1360,6 +1360,7 @@ def process_audio_file(
             '.m4a': 'ipod',  # pydub uses 'ipod' for m4a
             '.wma': 'wma',
             '.aiff': 'aiff',
+            '.aif': 'aiff',  # .aif is also AIFF format
             '.au': 'au'
         }
         output_format = format_map.get(original_ext, 'wav')
@@ -1515,20 +1516,38 @@ def process_audio_file(
         
         # If we converted lossless to FLAC and the original file still exists, delete it
         # Only delete if processing in place (input and output are the same location)
-        if convert_to_flac and input_path.suffix.lower() in ('.aflac', '.aiff'):
+        if convert_to_flac and input_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
             if input_path.exists() and input_path != output_path:
                 # Only delete if output is in the same directory (in-place processing)
                 if input_path.parent == output_path.parent:
                     try:
                         input_path.unlink()
-                        original_format = "AFLAC" if input_path.suffix.lower() == '.aflac' else "AIFF"
+                        ext = input_path.suffix.lower()
+                        if ext == '.aflac':
+                            original_format = "AFLAC"
+                        elif ext in ('.aiff', '.aif'):
+                            original_format = "AIFF"
+                        else:
+                            original_format = "lossless"
                         print(f"  - Removed original {original_format} file")
                     except Exception as e:
-                        original_format = "AFLAC" if input_path.suffix.lower() == '.aflac' else "AIFF"
+                        ext = input_path.suffix.lower()
+                        if ext == '.aflac':
+                            original_format = "AFLAC"
+                        elif ext in ('.aiff', '.aif'):
+                            original_format = "AIFF"
+                        else:
+                            original_format = "lossless"
                         print(f"  - Warning: Could not remove original {original_format} file: {str(e)}")
                 else:
                     # Output is in a different location, keep original file
-                    original_format = "AFLAC" if input_path.suffix.lower() == '.aflac' else "AIFF"
+                    ext = input_path.suffix.lower()
+                    if ext == '.aflac':
+                        original_format = "AFLAC"
+                    elif ext in ('.aiff', '.aif'):
+                        original_format = "AIFF"
+                    else:
+                        original_format = "lossless"
                     print(f"  - Original {original_format} file preserved (output in different folder)")
         
         print(f"  ✓ Successfully processed: {output_path.name}\n")

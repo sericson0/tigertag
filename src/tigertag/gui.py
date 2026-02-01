@@ -2304,9 +2304,9 @@ class ToolGUI:
                     import time
                     time.sleep(0.3)
                     
-                    # Handle lossless to FLAC conversion in filename (AFLAC and AIFF)
+                    # Handle lossless to FLAC conversion in filename (AFLAC and AIFF/AIF)
                     audio_output_path = new_path
-                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff'):
+                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
                         audio_output_path = new_path.with_suffix('.flac')
                         # Handle conflicts
                         counter = 1
@@ -2575,9 +2575,9 @@ class ToolGUI:
                         self.root.after(0, lambda: self.music_player.unload_file())
                         time.sleep(0.3)
                         
-                        # Handle lossless to FLAC conversion in filename (AFLAC and AIFF)
+                        # Handle lossless to FLAC conversion in filename (AFLAC and AIFF/AIF)
                         audio_output_path = new_path
-                        if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff'):
+                        if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
                             audio_output_path = new_path.with_suffix('.flac')
                             # Handle conflicts
                             counter = 1
