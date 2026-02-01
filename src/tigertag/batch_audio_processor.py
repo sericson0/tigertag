@@ -1743,12 +1743,12 @@ def process_audio_file(
                 print(f"  - Warning: Could not preserve metadata")
         
         # Apply album art separately (FFmpeg might not preserve it properly)
-        # For AIFF to FLAC conversions, always try to copy album art from original file
-        if input_path.suffix.lower() in ('.aif', '.aiff', '.aifc') and output_path.suffix.lower() == '.flac':
-            print(f"  - AIFF to FLAC conversion detected, copying album art from original file...")
+        # For ALL FLAC outputs, always copy album art from original file to ensure it's preserved
+        if output_path.suffix.lower() == '.flac':
+            print(f"  - FLAC output detected, copying album art from original file...")
             original_album_art = extract_album_art(input_path)
             if original_album_art:
-                print(f"  - Extracted album art from original AIFF file ({len(original_album_art)} bytes)")
+                print(f"  - Extracted album art from original file ({len(original_album_art)} bytes)")
                 if apply_album_art(output_path, original_album_art):
                     print(f"  - Album art successfully copied to FLAC file")
                 else:
@@ -1757,9 +1757,9 @@ def process_audio_file(
                     print(f"  - Output exists: {output_path.exists()}")
                     print(f"  - Album art size: {len(original_album_art)} bytes")
             else:
-                print(f"  - No album art found in original AIFF file")
+                print(f"  - No album art found in original file")
         elif album_art:
-            # For other conversions, use the previously extracted album art
+            # For other output formats, use the previously extracted album art
             print(f"  - Attempting to apply album art to {output_path.name}...")
             if apply_album_art(output_path, album_art):
                 print(f"  - Album art preserved")
