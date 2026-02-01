@@ -776,6 +776,22 @@ class ToolGUI:
         self.normalize_audio = tk.BooleanVar(value=False)
         self.aufs_target = tk.StringVar(value="-13.0")  # Default AUFS target
         
+        # Denoising options
+        self.enable_denoise = tk.BooleanVar(value=False)
+        self.denoise_strength = tk.StringVar(value="moderate")  # Options: light, moderate, strong
+        self.auto_detect_noise = tk.BooleanVar(value=True)  # Auto-detect noise and prompt user
+        self.noise_threshold = tk.StringVar(value="0.15")  # Threshold for noise detection (0.0-1.0)
+        self.denoise_stationary = tk.BooleanVar(value=True)  # Use stationary noise reduction
+        self.prop_decrease = tk.StringVar(value="0.5")  # Proportion of noise to reduce (0.0-1.0)
+        self.use_noise_sample = tk.BooleanVar(value=True)  # Use noise sample from quiet sections
+        
+        # VST3 plugin options
+        self.enable_vst3 = tk.BooleanVar(value=False)
+        self.vst3_plugins = []  # List of VST3 plugin paths
+        self.vst3_parameters = []  # List of parameter dicts for each plugin
+        self.vst3_plugin_instances = []  # List of loaded plugin instances for parameter access
+        self.vst3_plugin_windows = {}  # Dict mapping plugin index to parameter editor window
+        
         # Output folder for processed audio files
         self.output_folder_path = tk.StringVar()
         self.output_structure = tk.StringVar(value="preserve")  # "preserve" or "by_artist"
@@ -796,6 +812,13 @@ class ToolGUI:
         
         # Undo history - stack of operations that can be undone
         self.undo_history = []  # List of dicts with: original_path, new_path, chosen_idx, catalogue, audio_folder
+        
+        # Pause/Resume functionality
+        self.is_paused = False
+        self.processing_thread = None
+        self.pause_event = threading.Event()  # Event to control pause/resume
+        self.pause_event.set()  # Initially set (not paused)
+        self.resume_data = None  # Store state for resuming: (folders, metadata_dict, start_year, end_year, selected_artists, current_file_index)
         
         # Load saved config (will be loaded after widgets are created)
         self.artists = artists
@@ -828,13 +851,14 @@ class ToolGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(6, weight=1)  # Console row
+        main_frame.rowconfigure(7, weight=1)  # Console row
         
-        # Top row: Settings and Audio Processing dropdowns
+        # Top row: Settings, Audio Processing, and Denoising dropdowns
         top_row_frame = ttk.Frame(main_frame)
         top_row_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         top_row_frame.columnconfigure(0, weight=1)
         top_row_frame.columnconfigure(1, weight=1)
+        top_row_frame.columnconfigure(2, weight=1)
         
         # Settings dropdown (left side)
         self.settings_dropdown = AudioProcessingDropdown(top_row_frame)
@@ -931,7 +955,7 @@ class ToolGUI:
         
         # Add checkboxes to audio processing dropdown
         self.audio_processing_dropdown.add_checkbox(
-            "Convert AFLAC to FLAC", self.convert_aflac_to_flac, 0, 0
+            "Convert Lossless to FLAC", self.convert_aflac_to_flac, 0, 0
         )
         self.audio_processing_dropdown.add_checkbox(
             "Sum to Mono", self.convert_to_mono, 0, 1
@@ -949,6 +973,46 @@ class ToolGUI:
         # AUFS target input in audio processing dropdown
         ttk.Label(self.audio_processing_dropdown.dropdown_frame, text="AUFS Target:").grid(row=2, column=1, sticky=tk.W, padx=(5, 5), pady=2)
         ttk.Entry(self.audio_processing_dropdown.dropdown_frame, textvariable=self.aufs_target, width=10).grid(row=2, column=2, sticky=tk.W, padx=5, pady=2)
+        
+        # Denoising dropdown (separate from audio processing)
+        self.denoising_dropdown = AudioProcessingDropdown(top_row_frame)
+        self.denoising_dropdown.grid(row=0, column=2, sticky=(tk.W, tk.E), padx=(5, 0))
+        self.denoising_dropdown.title_label.config(text="Denoising Options")
+        
+        # Enable denoising checkbox
+        self.denoising_dropdown.add_checkbox(
+            "Enable Denoising", self.enable_denoise, 0, 0
+        )
+        self.denoising_dropdown.add_checkbox(
+            "Auto-detect Noise", self.auto_detect_noise, 0, 1
+        )
+        self.denoising_dropdown.add_checkbox(
+            "Use Noise Sample", self.use_noise_sample, 1, 0
+        )
+        self.denoising_dropdown.add_checkbox(
+            "Stationary Mode", self.denoise_stationary, 1, 1
+        )
+        
+        # Denoising strength dropdown
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="Denoise Strength:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        denoise_strength_combo = ttk.Combobox(
+            self.denoising_dropdown.dropdown_frame,
+            textvariable=self.denoise_strength,
+            values=["light", "moderate", "strong"],
+            state="readonly",
+            width=15
+        )
+        denoise_strength_combo.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=5, pady=2)
+        
+        # Noise detection threshold
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="Noise Threshold:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Entry(self.denoising_dropdown.dropdown_frame, textvariable=self.noise_threshold, width=10).grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="(0.0-1.0, lower=more sensitive)").grid(row=3, column=2, sticky=tk.W, padx=5, pady=2)
+        
+        # Proportion decrease
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="Noise Reduction:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Entry(self.denoising_dropdown.dropdown_frame, textvariable=self.prop_decrease, width=10).grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(self.denoising_dropdown.dropdown_frame, text="(0.0-1.0, higher=more reduction)").grid(row=4, column=2, sticky=tk.W, padx=5, pady=2)
         
         # Folder selection with output folder on same row (row 1)
         ttk.Label(main_frame, text="Input Folder:").grid(row=1, column=0, sticky=tk.W, pady=5)
@@ -992,21 +1056,67 @@ class ToolGUI:
         ttk.Label(year_frame, text="End Year:").grid(row=0, column=1, sticky=tk.W, padx=(0, 5))
         ttk.Entry(year_frame, textvariable=self.end_year, width=15).grid(row=0, column=2, sticky=tk.W)
         
-        # Artist selector (row 3)
-        ttk.Label(main_frame, text="Artists:").grid(row=3, column=0, sticky=(tk.W, tk.N), pady=5)
+        # VST3 plugins dropdown (row 3)
+        vst3_row_frame = ttk.Frame(main_frame)
+        vst3_row_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        vst3_row_frame.columnconfigure(0, weight=1)
+        
+        self.vst3_dropdown = AudioProcessingDropdown(vst3_row_frame)
+        self.vst3_dropdown.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=0)
+        self.vst3_dropdown.title_label.config(text="VST3 Plugin Options")
+        
+        # Enable VST3 checkbox
+        self.vst3_dropdown.add_checkbox(
+            "Enable VST3 Processing", self.enable_vst3, 0, 0
+        )
+        
+        # Plugin list frame
+        plugin_list_frame = ttk.Frame(self.vst3_dropdown.dropdown_frame)
+        plugin_list_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=5)
+        plugin_list_frame.columnconfigure(0, weight=1)
+        
+        # Plugin listbox with scrollbar
+        ttk.Label(plugin_list_frame, text="VST3 Plugins:").grid(row=0, column=0, sticky=tk.W, pady=(0, 2))
+        listbox_frame = ttk.Frame(plugin_list_frame)
+        listbox_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        listbox_frame.columnconfigure(0, weight=1)
+        
+        self.vst3_listbox = tk.Listbox(listbox_frame, height=4, selectmode=tk.SINGLE)
+        self.vst3_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        vst3_scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self.vst3_listbox.yview)
+        vst3_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.vst3_listbox.config(yscrollcommand=vst3_scrollbar.set)
+        
+        # Buttons for managing plugins
+        plugin_button_frame = ttk.Frame(plugin_list_frame)
+        plugin_button_frame.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=2)
+        
+        ttk.Button(plugin_button_frame, text="Add Plugin", command=self.add_vst3_plugin).grid(row=0, column=0, padx=2)
+        ttk.Button(plugin_button_frame, text="Remove Selected", command=self.remove_vst3_plugin).grid(row=0, column=1, padx=2)
+        ttk.Button(plugin_button_frame, text="Clear All", command=self.clear_vst3_plugins).grid(row=0, column=2, padx=2)
+        ttk.Button(plugin_button_frame, text="Edit Plugin", command=self.edit_vst3_plugin).grid(row=0, column=3, padx=2)
+        ttk.Button(plugin_button_frame, text="Open GUI", command=self.open_vst3_gui).grid(row=0, column=4, padx=2)
+        ttk.Button(plugin_button_frame, text="Preview", command=self.preview_processed_audio).grid(row=0, column=5, padx=2)
+        
+        # Update listbox if plugins were loaded from config
+        if hasattr(self, '_vst3_plugins_loaded') and self._vst3_plugins_loaded:
+            self.update_vst3_listbox()
+        
+        # Artist selector (row 4, moved down)
+        ttk.Label(main_frame, text="Artists:").grid(row=4, column=0, sticky=(tk.W, tk.N), pady=5)
         self.artist_selector = ArtistSelectorDropdown(main_frame, self.artists)
-        self.artist_selector.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=5)
+        self.artist_selector.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=5)
         
         player_frame = ttk.LabelFrame(main_frame, text="Music Player", padding="5")
-        player_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=5)
+        player_frame.grid(row=5, column=1, sticky=(tk.W, tk.E), pady=5)
         player_frame.columnconfigure(0, weight=1)
         
         self.music_player = MusicPlayer(player_frame)
         self.music_player.pack(fill=tk.BOTH, expand=True)
         
-        # Run button, toggles, and Undo button (row 5) - on same line
+        # Run button, toggles, and Undo button (row 6) - on same line
         run_button_frame = ttk.Frame(main_frame)
-        run_button_frame.grid(row=5, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
+        run_button_frame.grid(row=6, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
         run_button_frame.columnconfigure(0, weight=1)
         
         # Toggle buttons for processing options (on same line as run button)
@@ -1031,8 +1141,8 @@ class ToolGUI:
         )
         self.process_audio_check.grid(row=0, column=2, padx=5)
         
-        # Run button - centered
-        self.run_button = ttk.Button(run_button_frame, text="Run TigerTag", command=self.run_tag_updater)
+        # Run/Pause/Resume button - centered
+        self.run_button = ttk.Button(run_button_frame, text="Run TigerTag", command=self.toggle_run_pause)
         self.run_button.grid(row=0, column=3, padx=(20, 0))
         
         # Undo button
@@ -1051,7 +1161,7 @@ class ToolGUI:
         self.progress_counter.grid(row=0, column=1, sticky=tk.E)
         
         console_frame = ttk.LabelFrame(main_frame, text="Console Output", padding="5")
-        console_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        console_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         console_frame.columnconfigure(0, weight=1)
         console_frame.rowconfigure(0, weight=1)
         
@@ -1082,9 +1192,9 @@ class ToolGUI:
         self.console.tag_config("magenta", foreground="#FF00FF")
         self.console.tag_config("bold", font=("Consolas", 10, "bold"))
         
-        # Input area (visible by default)
+        # Input area (visible by default, at bottom below console)
         self.input_frame = ttk.Frame(main_frame)
-        self.input_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.input_frame.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         self.input_frame.columnconfigure(1, weight=1)
         
         ttk.Label(self.input_frame, text="Input:").grid(row=0, column=0, sticky=tk.W)
@@ -1154,6 +1264,11 @@ class ToolGUI:
         
         # Load selected artists - will be applied after widgets are created
         self._saved_selected_artists = config_handler.get_selected_artists()
+        
+        # Load VST3 settings
+        self.enable_vst3.set(config_handler.get_enable_vst3())
+        self.vst3_plugins = config_handler.get_vst3_plugins()
+        self.vst3_parameters = config_handler.get_vst3_parameters()
     
     def save_all_settings(self):
         """Save all current settings to config file."""
@@ -1200,6 +1315,11 @@ class ToolGUI:
         if hasattr(self, 'artist_selector'):
             selected_artists = self.artist_selector.get_selected_artists()
             config_handler.set_selected_artists(selected_artists)
+        
+        # Save VST3 settings
+        config_handler.set_enable_vst3(self.enable_vst3.get())
+        config_handler.set_vst3_plugins(self.vst3_plugins)
+        config_handler.set_vst3_parameters(self.vst3_parameters)
     
     def on_link_database_toggle(self):
         """Handle link database checkbox toggle."""
@@ -1225,6 +1345,607 @@ class ToolGUI:
         print("Updating Metadata")
         csv_to_parquet()
 
+    def add_vst3_plugin(self):
+        """Add a VST3 plugin to the list."""
+        plugin_path = filedialog.askopenfilename(
+            title="Select VST3 Plugin",
+            filetypes=[("VST3 Plugins", "*.vst3"), ("All Files", "*.*")]
+        )
+        if plugin_path:
+            plugin_path = Path(plugin_path)
+            if plugin_path.suffix.lower() == '.vst3':
+                self.vst3_plugins.append(str(plugin_path))
+                self.vst3_parameters.append({})  # Empty parameters dict
+                self.update_vst3_listbox()
+            else:
+                print(f"Error: {plugin_path.name} is not a VST3 plugin (.vst3 file)")
+    
+    def remove_vst3_plugin(self):
+        """Remove the selected VST3 plugin from the list."""
+        selection = self.vst3_listbox.curselection()
+        if selection:
+            index = selection[0]
+            # Close parameter window if open
+            if index in self.vst3_plugin_windows:
+                try:
+                    self.vst3_plugin_windows[index].destroy()
+                    del self.vst3_plugin_windows[index]
+                except:
+                    pass
+            self.vst3_plugins.pop(index)
+            self.vst3_parameters.pop(index)
+            if index < len(self.vst3_plugin_instances):
+                self.vst3_plugin_instances.pop(index)
+            self.update_vst3_listbox()
+    
+    def clear_vst3_plugins(self):
+        """Clear all VST3 plugins from the list."""
+        # Close all parameter windows
+        for window in list(self.vst3_plugin_windows.values()):
+            try:
+                window.destroy()
+            except:
+                pass
+        self.vst3_plugin_windows.clear()
+        self.vst3_plugins.clear()
+        self.vst3_parameters.clear()
+        self.vst3_plugin_instances.clear()
+        self.update_vst3_listbox()
+    
+    def update_vst3_listbox(self):
+        """Update the VST3 plugin listbox display."""
+        self.vst3_listbox.delete(0, tk.END)
+        for plugin_path in self.vst3_plugins:
+            self.vst3_listbox.insert(tk.END, Path(plugin_path).name)
+    
+    def load_vst3_plugin_instance(self, plugin_path: str):
+        """Load a VST3 plugin instance for parameter access."""
+        try:
+            import pedalboard
+            from pedalboard import Plugin
+            from pathlib import Path as PathLib
+            
+            plugin_file = PathLib(plugin_path)
+            if not plugin_file.exists():
+                print(f"Plugin file not found: {plugin_path}")
+                return None
+            
+            # Try different methods to load the plugin based on pedalboard version
+            # Method 1: Try pedalboard.load_plugin() (newer API)
+            if hasattr(pedalboard, 'load_plugin'):
+                try:
+                    plugin = pedalboard.load_plugin(str(plugin_file.resolve()))
+                    return plugin
+                except Exception as e1:
+                    # If that fails, try other methods
+                    pass
+            
+            # Method 2: Try Plugin() with string path
+            try:
+                plugin = Plugin(str(plugin_file.resolve()))
+                return plugin
+            except (TypeError, ValueError) as e2:
+                # Method 3: Try Plugin() with Path object
+                try:
+                    plugin = Plugin(plugin_file)
+                    return plugin
+                except (TypeError, ValueError) as e3:
+                    # Method 4: Try with just the filename (if in VST3 search path)
+                    try:
+                        plugin = Plugin(plugin_file.name)
+                        return plugin
+                    except (TypeError, ValueError) as e4:
+                        # All methods failed
+                        error_msg = f"Could not load plugin using any method.\n"
+                        error_msg += f"  Tried: load_plugin('{plugin_file.resolve()}')\n"
+                        error_msg += f"  Tried: Plugin('{plugin_file.resolve()}')\n"
+                        error_msg += f"  Tried: Plugin({plugin_file})\n"
+                        error_msg += f"  Tried: Plugin('{plugin_file.name}')\n"
+                        error_msg += f"  Last error: {e4}"
+                        raise ValueError(error_msg)
+                
+        except Exception as e:
+            print(f"Error loading VST3 plugin {Path(plugin_path).name}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def edit_vst3_plugin(self):
+        """Open a parameter editor window for the selected VST3 plugin."""
+        selection = self.vst3_listbox.curselection()
+        if not selection:
+            print("Please select a plugin to edit")
+            return
+        
+        index = selection[0]
+        plugin_path = self.vst3_plugins[index]
+        
+        # Close existing window for this plugin if open
+        if index in self.vst3_plugin_windows:
+            try:
+                self.vst3_plugin_windows[index].destroy()
+            except:
+                pass
+        
+        # Load plugin instance if not already loaded
+        if index >= len(self.vst3_plugin_instances) or self.vst3_plugin_instances[index] is None:
+            plugin_instance = self.load_vst3_plugin_instance(plugin_path)
+            if plugin_instance is None:
+                print(f"Failed to load plugin: {Path(plugin_path).name}")
+                return
+            # Extend list if needed
+            while len(self.vst3_plugin_instances) <= index:
+                self.vst3_plugin_instances.append(None)
+            self.vst3_plugin_instances[index] = plugin_instance
+        else:
+            plugin_instance = self.vst3_plugin_instances[index]
+        
+        # Create parameter editor window
+        param_window = tk.Toplevel(self.root)
+        param_window.title(f"Edit Parameters: {Path(plugin_path).name}")
+        param_window.geometry("500x600")
+        
+        # Store reference
+        self.vst3_plugin_windows[index] = param_window
+        
+        # Create scrollable frame for parameters
+        canvas = tk.Canvas(param_window)
+        scrollbar = ttk.Scrollbar(param_window, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Get plugin parameters
+        param_controls = {}
+        row = 0
+        try:
+            # Try to get parameters from pedalboard plugin
+            # Pedalboard plugins expose parameters through the 'parameters' attribute
+            if hasattr(plugin_instance, 'parameters'):
+                params_dict = plugin_instance.parameters
+                for param_name, param_obj in params_dict.items():
+                    try:
+                        # Get current value and range
+                        current_value = float(param_obj.raw_value)
+                        min_val = float(param_obj.min_value) if hasattr(param_obj, 'min_value') else 0.0
+                        max_val = float(param_obj.max_value) if hasattr(param_obj, 'max_value') else 1.0
+                        
+                        # Create label
+                        label_text = param_name.replace('_', ' ').title()
+                        ttk.Label(scrollable_frame, text=label_text + ":").grid(
+                            row=row, column=0, sticky=tk.W, padx=5, pady=2
+                        )
+                        
+                        # Create scale for parameter
+                        var = tk.DoubleVar(value=current_value)
+                        scale = ttk.Scale(
+                            scrollable_frame,
+                            from_=min_val,
+                            to=max_val,
+                            variable=var,
+                            orient=tk.HORIZONTAL,
+                            length=300
+                        )
+                        scale.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
+                        
+                        # Value label
+                        value_label = ttk.Label(scrollable_frame, text=f"{current_value:.3f}")
+                        value_label.grid(row=row, column=2, padx=5, pady=2)
+                        
+                        # Update callback
+                        def update_param(name=param_name, v=var, label=value_label, 
+                                       inst=plugin_instance, idx=index, param=param_obj):
+                            val = v.get()
+                            try:
+                                param.raw_value = val
+                                label.config(text=f"{val:.3f}")
+                                # Update saved parameters
+                                if idx < len(self.vst3_parameters):
+                                    if self.vst3_parameters[idx] is None:
+                                        self.vst3_parameters[idx] = {}
+                                    self.vst3_parameters[idx][name] = val
+                            except Exception as e:
+                                print(f"Error updating parameter {name}: {e}")
+                        
+                        def on_scale_change(val):
+                            var.set(float(val))
+                            update_param()
+                        
+                        scale.configure(command=on_scale_change)
+                        var.trace('w', lambda *args, u=update_param: u())
+                        
+                        param_controls[param_name] = (var, scale, value_label)
+                        row += 1
+                    except Exception as e:
+                        print(f"Error processing parameter {param_name}: {e}")
+                        continue
+            else:
+                # Fallback: try to access attributes directly
+                params = dir(plugin_instance)
+                for attr_name in params:
+                    if attr_name.startswith('_') or callable(getattr(plugin_instance, attr_name, None)):
+                        continue
+                    try:
+                        value = getattr(plugin_instance, attr_name)
+                        if isinstance(value, (int, float)):
+                            ttk.Label(scrollable_frame, text=attr_name.replace('_', ' ').title() + ":").grid(
+                                row=row, column=0, sticky=tk.W, padx=5, pady=2
+                            )
+                            var = tk.DoubleVar(value=float(value))
+                            scale = ttk.Scale(
+                                scrollable_frame,
+                                from_=0.0,
+                                to=1.0,
+                                variable=var,
+                                orient=tk.HORIZONTAL,
+                                length=300
+                            )
+                            scale.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
+                            value_label = ttk.Label(scrollable_frame, text=f"{value:.3f}")
+                            value_label.grid(row=row, column=2, padx=5, pady=2)
+                            
+                            def update_param(name=attr_name, v=var, label=value_label, 
+                                           inst=plugin_instance, idx=index):
+                                val = v.get()
+                                try:
+                                    setattr(inst, name, val)
+                                    label.config(text=f"{val:.3f}")
+                                    if idx < len(self.vst3_parameters):
+                                        if self.vst3_parameters[idx] is None:
+                                            self.vst3_parameters[idx] = {}
+                                        self.vst3_parameters[idx][name] = val
+                                except Exception as e:
+                                    print(f"Error updating parameter {name}: {e}")
+                            
+                            scale.configure(command=lambda v=var, l=value_label, u=update_param: 
+                                          (u(), l.config(text=f"{v.get():.3f}")))
+                            var.trace('w', lambda *args, u=update_param: u())
+                            row += 1
+                    except:
+                        continue
+            
+            if row == 0:
+                ttk.Label(scrollable_frame, text="No editable parameters found for this plugin").grid(
+                    row=0, column=0, columnspan=3, padx=5, pady=10
+                )
+        except Exception as e:
+            import traceback
+            error_msg = f"Error reading parameters: {e}\n{traceback.format_exc()}"
+            ttk.Label(scrollable_frame, text=error_msg, wraplength=450).grid(
+                row=0, column=0, columnspan=3, padx=5, pady=10
+            )
+        
+        # Close button
+        def on_close():
+            param_window.destroy()
+            if index in self.vst3_plugin_windows:
+                del self.vst3_plugin_windows[index]
+        
+        param_window.protocol("WM_DELETE_WINDOW", on_close)
+        
+        ttk.Button(scrollable_frame, text="Close", command=on_close).grid(
+            row=row+1, column=0, columnspan=3, pady=10
+        )
+    
+    def open_vst3_gui(self):
+        """Open the native VST3 plugin GUI in an external window."""
+        selection = self.vst3_listbox.curselection()
+        if not selection:
+            print("Please select a plugin to open its GUI")
+            return
+        
+        index = selection[0]
+        plugin_path = self.vst3_plugins[index]
+        
+        # Load plugin instance if not already loaded
+        if index >= len(self.vst3_plugin_instances) or self.vst3_plugin_instances[index] is None:
+            plugin_instance = self.load_vst3_plugin_instance(plugin_path)
+            if plugin_instance is None:
+                print(f"Failed to load plugin: {Path(plugin_path).name}")
+                return
+            # Extend list if needed
+            while len(self.vst3_plugin_instances) <= index:
+                self.vst3_plugin_instances.append(None)
+            self.vst3_plugin_instances[index] = plugin_instance
+        else:
+            plugin_instance = self.vst3_plugin_instances[index]
+        
+        try:
+            import pedalboard
+            from pedalboard import Plugin
+            
+            # Method 1: Try to access JUCE's internal plugin wrapper
+            # Pedalboard wraps JUCE plugins, and JUCE has editor support
+            try:
+                # Try to get the underlying JUCE plugin instance
+                if hasattr(plugin_instance, '_wrapped_plugin'):
+                    juce_plugin = plugin_instance._wrapped_plugin
+                elif hasattr(plugin_instance, '_plugin'):
+                    juce_plugin = plugin_instance._plugin
+                elif hasattr(plugin_instance, '__dict__'):
+                    # Search for JUCE-related attributes
+                    for key, value in plugin_instance.__dict__.items():
+                        if 'juce' in key.lower() or 'processor' in key.lower():
+                            juce_plugin = value
+                            break
+                    else:
+                        juce_plugin = None
+                else:
+                    juce_plugin = None
+                
+                if juce_plugin:
+                    # Try to create/open editor
+                    if hasattr(juce_plugin, 'createEditorIfNeeded'):
+                        editor = juce_plugin.createEditorIfNeeded()
+                        if editor:
+                            if hasattr(editor, 'setVisible'):
+                                editor.setVisible(True)
+                            if hasattr(editor, 'addToDesktop'):
+                                editor.addToDesktop(0)
+                            print(f"Opened GUI for {Path(plugin_path).name}")
+                            return
+                    
+                    # Try other JUCE editor methods
+                    if hasattr(juce_plugin, 'getActiveEditor'):
+                        editor = juce_plugin.getActiveEditor()
+                        if editor:
+                            if hasattr(editor, 'setVisible'):
+                                editor.setVisible(True)
+                            print(f"Opened GUI for {Path(plugin_path).name}")
+                            return
+                    
+                    # Try to access IEditController (VST3 standard)
+                    if hasattr(juce_plugin, 'getController'):
+                        controller = juce_plugin.getController()
+                        if controller:
+                            if hasattr(controller, 'openEditor'):
+                                controller.openEditor()
+                                print(f"Opened GUI for {Path(plugin_path).name}")
+                                return
+            except Exception as e:
+                pass
+            
+            # Method 2: Try direct attribute access on plugin instance
+            try:
+                # Check all attributes for editor-related objects
+                attrs_to_check = dir(plugin_instance)
+                for attr_name in attrs_to_check:
+                    if attr_name.startswith('_'):
+                        continue
+                    try:
+                        attr_value = getattr(plugin_instance, attr_name)
+                        # Check if it's an editor or component
+                        if hasattr(attr_value, 'setVisible') or hasattr(attr_value, 'show') or hasattr(attr_value, 'addToDesktop'):
+                            if hasattr(attr_value, 'setVisible'):
+                                attr_value.setVisible(True)
+                            if hasattr(attr_value, 'addToDesktop'):
+                                attr_value.addToDesktop(0)
+                            elif hasattr(attr_value, 'show'):
+                                attr_value.show()
+                            print(f"Opened GUI for {Path(plugin_path).name}")
+                            return
+                    except:
+                        continue
+            except Exception as e:
+                pass
+            
+            # Method 3: Try to use pedalboard's internal mechanisms
+            try:
+                # Create a new plugin instance and try to trigger GUI creation
+                # Some plugins create their GUI on first access
+                test_plugin = Plugin(plugin_path)
+                # Access parameters to potentially trigger GUI initialization
+                if hasattr(test_plugin, 'parameters'):
+                    _ = test_plugin.parameters
+                # Try to find if GUI was created
+                if hasattr(test_plugin, '_editor') or hasattr(test_plugin, '_gui'):
+                    editor = getattr(test_plugin, '_editor', None) or getattr(test_plugin, '_gui', None)
+                    if editor:
+                        if hasattr(editor, 'setVisible'):
+                            editor.setVisible(True)
+                        if hasattr(editor, 'addToDesktop'):
+                            editor.addToDesktop(0)
+                        print(f"Opened GUI for {Path(plugin_path).name}")
+                        return
+            except Exception as e:
+                pass
+            
+            # Method 4: Windows-specific - Try to find existing plugin window
+            if sys.platform == 'win32':
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+                    
+                    plugin_name = Path(plugin_path).stem
+                    user32 = ctypes.windll.user32
+                    
+                    # Callback to find window by title
+                    found_window = [None]
+                    
+                    def enum_windows_callback(hwnd, lParam):
+                        window_text = ctypes.create_unicode_buffer(512)
+                        user32.GetWindowTextW(hwnd, window_text, 512)
+                        title = window_text.value.lower()
+                        # Check if window title contains plugin name or common VST editor terms
+                        if (plugin_name.lower() in title or 
+                            'vst' in title or 
+                            'editor' in title or 
+                            'plugin' in title):
+                            # Check if it's a visible window
+                            if user32.IsWindowVisible(hwnd):
+                                found_window[0] = hwnd
+                                return False
+                        return True
+                    
+                    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+                    user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
+                    
+                    if found_window[0]:
+                        # Bring window to front
+                        user32.ShowWindow(found_window[0], 9)  # SW_RESTORE
+                        user32.SetForegroundWindow(found_window[0])
+                        print(f"Found and brought to front: {Path(plugin_path).name} GUI window")
+                        return
+                except Exception as e:
+                    pass
+            
+            # Method 5: Try calling any GUI-related methods
+            gui_methods = ['show_gui', 'open_editor', 'show_editor', 'open_gui', 'show_plugin_editor', 
+                          'createEditor', 'openEditor', 'showEditor']
+            for method_name in gui_methods:
+                if hasattr(plugin_instance, method_name):
+                    method = getattr(plugin_instance, method_name)
+                    if callable(method):
+                        try:
+                            result = method()
+                            if result:
+                                print(f"Opened GUI for {Path(plugin_path).name} using {method_name}")
+                            else:
+                                print(f"Attempted to open GUI for {Path(plugin_path).name} using {method_name}")
+                            return
+                        except Exception as e:
+                            continue
+            
+            # Method 6: Try to use a VST3 host application if available
+            # Some systems have VST3 hosts that can open plugins
+            if sys.platform == 'win32':
+                try:
+                    import subprocess
+                    import os
+                    # Common VST3 host locations on Windows
+                    possible_hosts = [
+                        r"C:\Program Files\Common Files\VST3\*.vst3",  # Plugin folder (won't work, but checking)
+                    ]
+                    # Try to find and use a VST3 host if available
+                    # This is a placeholder - would need actual VST3 host executable
+                except:
+                    pass
+            
+            # If all methods fail, inform user with helpful message
+            print(f"\n⚠ Could not open native GUI for {Path(plugin_path).name}")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("Note: Pedalboard (the library used for VST3 support) does not")
+            print("directly support opening native plugin GUIs. This is a limitation")
+            print("of the library, not a bug in this application.")
+            print("\nAlternatives:")
+            print("  1. Use 'Edit Plugin' button to adjust parameters via sliders")
+            print("  2. Open the plugin in a VST3 host application (DAW, etc.)")
+            print("  3. Some plugins may expose their GUI through other means")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            
+        except Exception as e:
+            print(f"Error opening plugin GUI: {e}")
+            import traceback
+            traceback.print_exc()
+            print("You can use 'Edit Plugin' to adjust parameters through the parameter editor.")
+    
+    def preview_processed_audio(self):
+        """Preview audio with current plugins and denoising settings applied."""
+        # Check if music player has a file loaded
+        if not hasattr(self, 'music_player') or not self.music_player.current_file:
+            print("Please load an audio file in the music player first")
+            return
+        
+        input_file = self.music_player.current_file
+        if not input_file.exists():
+            print(f"Audio file not found: {input_file}")
+            return
+        
+        print(f"Processing preview for: {input_file.name}")
+        print("This may take a moment...")
+        
+        # Process audio in a separate thread to avoid blocking GUI
+        import threading
+        def process_and_play():
+            try:
+                from pydub import AudioSegment
+                from pathlib import Path
+                import tempfile
+                
+                # Load audio
+                audio = AudioSegment.from_file(str(input_file))
+                
+                # Apply denoising if enabled
+                if self.enable_denoise.get():
+                    from batch_audio_processor import apply_denoising, detect_noise_level, find_noise_sample
+                    
+                    # Check noise level
+                    has_noise, noise_level = detect_noise_level(audio)
+                    noise_threshold_value = float(self.noise_threshold.get())
+                    
+                    if has_noise and noise_level > noise_threshold_value:
+                        # Find noise sample
+                        noise_sample = None
+                        if self.use_noise_sample.get():
+                            noise_sample = find_noise_sample(audio)
+                        
+                        # Get denoising parameters
+                        denoise_strength = self.denoise_strength.get()
+                        if denoise_strength == "light":
+                            prop_decrease = 0.3
+                            stationary = self.denoise_stationary.get()
+                        elif denoise_strength == "moderate":
+                            prop_decrease = float(self.prop_decrease.get())
+                            stationary = self.denoise_stationary.get()
+                        else:  # strong
+                            prop_decrease = 0.7
+                            stationary = False
+                        
+                        audio = apply_denoising(
+                            audio,
+                            strength=denoise_strength,
+                            noise_sample=noise_sample,
+                            stationary=stationary,
+                            prop_decrease=prop_decrease
+                        )
+                        print("  - Applied denoising")
+                
+                # Apply VST3 plugins if enabled
+                if self.enable_vst3.get() and self.vst3_plugins:
+                    from batch_audio_processor import apply_vst3_plugins
+                    # Use saved parameters, ensuring list is properly sized
+                    params = self.vst3_parameters if self.vst3_parameters else [{}] * len(self.vst3_plugins)
+                    # Ensure params list matches plugins list length
+                    while len(params) < len(self.vst3_plugins):
+                        params.append({})
+                    audio = apply_vst3_plugins(
+                        audio,
+                        self.vst3_plugins,
+                        params
+                    )
+                    print("  - Applied VST3 plugins")
+                
+                # Save to temporary file
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                temp_path = Path(temp_file.name)
+                temp_file.close()
+                
+                audio.export(str(temp_path), format='wav')
+                print(f"  - Preview file created: {temp_path.name}")
+                
+                # Load and play in music player
+                self.root.after(0, lambda: self.music_player.load_file(str(temp_path)))
+                self.root.after(0, lambda: self.music_player.toggle_play_pause())
+                
+                print("Preview ready - playing processed audio")
+                
+            except Exception as e:
+                print(f"Error creating preview: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        thread = threading.Thread(target=process_and_play, daemon=True)
+        thread.start()
+    
     def browse_folder(self):
         folder = filedialog.askdirectory()
         if folder:
@@ -1278,7 +1999,26 @@ class ToolGUI:
             
         return self.input_result
     
-    def run_tag_updater(self):
+    def toggle_run_pause(self):
+        """Toggle between Run, Pause, and Resume"""
+        if self.is_paused:
+            # Resume processing
+            self.is_paused = False
+            self.pause_event.set()  # Clear the pause event (allow processing to continue)
+            self.run_button.config(text="Pause", state='normal')
+            print("\nResuming processing...\n")
+        elif self.processing_thread and self.processing_thread.is_alive():
+            # Pause processing
+            self.is_paused = True
+            self.pause_event.clear()  # Set the pause event (block processing)
+            self.run_button.config(text="Resume", state='normal')
+            print("\nPausing processing...\n")
+        else:
+            # Start new processing
+            self.start_processing()
+    
+    def start_processing(self):
+        """Start the tag updater processing"""
         # Get folders to process
         folders_to_process = []
         if self.folder_paths:
@@ -1308,27 +2048,39 @@ class ToolGUI:
         # Get selected artists (may be empty for fuzzy matching)
         selected_artists = self.artist_selector.get_selected_artists()
             
-        # Clear console and add initial padding
-        self.console.delete(1.0, tk.END)
-        self.console.insert(tk.END, '\n' * 5)  # Add padding at the end
-        self.console.mark_set('padding_start', 'end-6l')  # Mark where padding starts
+        # Clear console and add initial padding (only if starting fresh)
+        if not self.is_paused:
+            self.console.delete(1.0, tk.END)
+            self.console.insert(tk.END, '\n' * 5)  # Add padding at the end
+            self.console.mark_set('padding_start', 'end-6l')  # Mark where padding starts
+            
+            # Reset progress
+            self._total_files_counted = False
+            self._current_total = 0
+            self._current_index = 0
+            self._update_progress(0, 0)
         
-        # Reset progress
-        self._total_files_counted = False
-        self._current_total = 0
-        self._current_index = 0
-        self._update_progress(0, 0)
+        # Reset pause state
+        self.is_paused = False
+        self.pause_event.set()  # Allow processing
         
-        # Disable run button
-        self.run_button.config(state='disabled')
+        # Update button
+        self.run_button.config(text="Pause", state='normal')
+        
+        # Store resume data
+        self.resume_data = (folders_to_process, self.metadata_dict, default_start, default_end, selected_artists, self._current_index)
         
         # Run in separate thread to keep GUI responsive
-        thread = threading.Thread(
+        self.processing_thread = threading.Thread(
             target=self.execute_tag_updater, 
             args=(folders_to_process, self.metadata_dict, default_start, default_end, selected_artists)
         )
-        thread.daemon = True
-        thread.start()
+        self.processing_thread.daemon = True
+        self.processing_thread.start()
+    
+    def run_tag_updater(self):
+        """Legacy method - redirects to start_processing"""
+        self.start_processing()
         
     def execute_tag_updater(self, folders, metadata_dict, default_start_year, default_end_year, selected_artists):
         # Redirect stdout to console
@@ -1351,7 +2103,8 @@ class ToolGUI:
                         files_upper = list(folder_path.rglob(f'*{ext.upper()}'))
                         # Count unique files (resolve to handle case-insensitive duplicates)
                         all_files = set([f.resolve() for f in files_lower + files_upper])
-                        total_files += len([f for f in all_files if Path(f).is_file()])
+                        # Filter out macOS resource fork files (._*)
+                        total_files += len([f for f in all_files if Path(f).is_file() and not Path(f).name.startswith('._')])
             
             # Set total files and initialize progress
             self._current_total = total_files
@@ -1364,6 +2117,9 @@ class ToolGUI:
             all_filename_changes = []
             
             for folder_path in folders:
+                # Check for pause
+                self.pause_event.wait()  # Wait if paused (block if pause_event is cleared)
+                
                 folder = Path(folder_path)
                 if not folder.exists() or not folder.is_dir():
                     print(f"Warning: Skipping invalid folder: {folder_path}")
@@ -1395,7 +2151,7 @@ class ToolGUI:
                     # Extract artist names from file tags
                     audio_extensions = ('.mp3', '.flac', '.m4a', '.mp4', '.aif', '.aiff', '.aflac')
                     for audio_file in folder.rglob('*'):
-                        if audio_file.is_file() and audio_file.suffix.lower() in audio_extensions:
+                        if audio_file.is_file() and audio_file.suffix.lower() in audio_extensions and not audio_file.name.startswith('._'):
                             try:
                                 tagged_artist = extract_artist_from_file_tags(audio_file)
                                 if tagged_artist:
@@ -1485,9 +2241,37 @@ class ToolGUI:
             sys.stdout = old_stdout
             __builtins__.input = old_input
             try:
-                self.root.after(0, lambda: self.run_button.config(state='normal'))
+                self.root.after(0, lambda: self.run_button.config(text="Run TigerTag", state='normal'))
+                self.is_paused = False
+                self.processing_thread = None
+                self.pause_event.set()
             except:
                 pass
+    
+    def _check_if_alac(self, audio_file: Path) -> bool:
+        """Check if an M4A file is ALAC (lossless) codec"""
+        if audio_file.suffix.lower() != '.m4a':
+            return False
+        try:
+            import subprocess
+            import sys
+            probe_cmd = [
+                'ffprobe', '-v', 'error', '-select_streams', 'a:0',
+                '-show_entries', 'stream=codec_name',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(audio_file)
+            ]
+            probe_result = subprocess.run(
+                probe_cmd,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            codec_name = probe_result.stdout.strip().lower() if probe_result.returncode == 0 else None
+            return codec_name == 'alac'
+        except Exception:
+            return False
     
     def process_folder(self, audio_folder, catalogue, total_files=None, current_index=0):
         """Process a single folder (including subfolders) and return filename changes"""
@@ -1504,12 +2288,15 @@ class ToolGUI:
         audio_files = list(set([f.resolve() for f in audio_files]))
         audio_files.sort()
         
-        # Filter to only files
-        audio_files = [f for f in audio_files if f.is_file()]
+        # Filter to only files and exclude macOS resource fork files (._*)
+        audio_files = [f for f in audio_files if f.is_file() and not f.name.startswith('._')]
         
         file_index = current_index
         
         for audio_file in audio_files:
+            # Check for pause
+            self.pause_event.wait()  # Wait if paused (block if pause_event is cleared)
+            
             # Update progress before processing
             file_index += 1
             if total_files:
@@ -1589,9 +2376,9 @@ class ToolGUI:
                     import time
                     time.sleep(0.3)
                     
-                    # Handle AFLAC to FLAC conversion in filename
+                    # Handle lossless to FLAC conversion in filename (AFLAC and AIFF/AIF)
                     audio_output_path = new_path
-                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                    if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
                         audio_output_path = new_path.with_suffix('.flac')
                         # Handle conflicts
                         counter = 1
@@ -1612,7 +2399,18 @@ class ToolGUI:
                             aufs_target_value = -13.0
                             print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
                         
-                        from batch_audio_processor import process_audio_file
+                        # Get denoising parameters
+                        try:
+                            noise_threshold_value = float(self.noise_threshold.get())
+                        except (ValueError, TypeError):
+                            noise_threshold_value = 0.15
+                        
+                        try:
+                            prop_decrease_value = float(self.prop_decrease.get())
+                            prop_decrease_value = max(0.0, min(1.0, prop_decrease_value))  # Clamp to 0-1
+                        except (ValueError, TypeError):
+                            prop_decrease_value = 0.5
+                        
                         success = process_audio_file(
                             input_path=new_path,
                             output_path=audio_output_path,
@@ -1621,7 +2419,17 @@ class ToolGUI:
                             convert_to_mono=self.convert_to_mono.get(),
                             convert_to_48khz=self.convert_to_48khz.get(),
                             use_24bit=self.use_24bit.get(),
-                            normalize=self.normalize_audio.get()
+                            normalize=self.normalize_audio.get(),
+                            denoise=self.enable_denoise.get(),
+                            denoise_strength=self.denoise_strength.get(),
+                            auto_detect_noise=self.auto_detect_noise.get(),
+                            prompt_user=self.custom_input if self.auto_detect_noise.get() else None,
+                            noise_threshold=noise_threshold_value,
+                            denoise_stationary=self.denoise_stationary.get(),
+                            prop_decrease=prop_decrease_value,
+                            use_noise_sample=self.use_noise_sample.get(),
+                            vst3_plugins=self.vst3_plugins if self.enable_vst3.get() else None,
+                            vst3_parameters=self.vst3_parameters if self.enable_vst3.get() else None
                         )
                         if success:
                             print(f"✓ Audio processing completed for: {audio_output_path.name}\n")
@@ -1760,10 +2568,26 @@ class ToolGUI:
                             .replace("year", new_metadata.year)
                         )
                         safe_title = slugify_filename(tag_title)
-                        new_filename = f"{safe_title}{audio_file.suffix.lower()}"
+                        # Determine file extension - use .flac if converting lossless to FLAC or ALAC
+                        file_ext = audio_file.suffix.lower()
+                        if self.convert_aflac_to_flac.get() and file_ext in ('.aflac', '.aiff', '.aif'):
+                            file_ext = '.flac'
+                        elif file_ext == '.m4a':
+                            # Check if M4A file is ALAC (lossless) - convert to FLAC
+                            is_alac = self._check_if_alac(audio_file)
+                            if is_alac:
+                                file_ext = '.flac'
+                        new_filename = f"{safe_title}{file_ext}"
                     else:
-                        # Use original filename
+                        # Use original filename, but update extension if converting to FLAC or ALAC
                         new_filename = old_filename
+                        if self.convert_aflac_to_flac.get() and audio_file.suffix.lower() in ('.aflac', '.aiff', '.aif'):
+                            new_filename = audio_file.stem + '.flac'
+                        elif audio_file.suffix.lower() == '.m4a':
+                            # Check if M4A file is ALAC (lossless) - convert to FLAC
+                            is_alac = self._check_if_alac(audio_file)
+                            if is_alac:
+                                new_filename = audio_file.stem + '.flac'
                     
                     # Determine output path based on structure option
                     structure = self.output_structure.get()
@@ -1805,6 +2629,21 @@ class ToolGUI:
                                   self.update_filename.get())
                     
                     if should_copy:
+                        # Check if M4A file is ALAC - update output path to FLAC before copying
+                        if audio_file.suffix.lower() == '.m4a':
+                            is_alac = self._check_if_alac(audio_file)
+                            if is_alac:
+                                # Update output_path to use .flac extension
+                                output_path = output_path.with_suffix('.flac')
+                                # Re-check for conflicts with new extension
+                                counter = 1
+                                original_output_path = output_path
+                                while output_path.exists():
+                                    stem = original_output_path.stem
+                                    suffix = original_output_path.suffix
+                                    output_path = original_output_path.parent / f"{stem} ({counter}){suffix}"
+                                    counter += 1
+                        
                         print(f"\nCopying file: {old_filename} → {output_path.name}")
                         shutil.copy2(audio_file, output_path)
                         print(f"Original file preserved: {audio_file.name}")
@@ -1825,13 +2664,23 @@ class ToolGUI:
                         print(f"\nSkipping {old_filename} - no processing options enabled")
                         continue
                     
-                    # Check if audio processing should be done (both toggle and options must be enabled)
+                    # Check if audio processing should be done
+                    # Process if the toggle is on AND either:
+                    # 1. Any audio processing option is enabled, OR
+                    # 2. File needs conversion (lossless to FLAC) - this requires processing
+                    # Check if M4A file is ALAC (will be converted to FLAC)
+                    is_alac_m4a = (audio_file.suffix.lower() == '.m4a' and self._check_if_alac(audio_file))
+                    file_needs_conversion = (self.convert_aflac_to_flac.get() and 
+                                           audio_file.suffix.lower() in ('.aflac', '.aiff', '.aif')) or is_alac_m4a
                     should_process_audio = self.process_audio.get() and (
                         self.convert_aflac_to_flac.get() or
                         self.convert_to_mono.get() or
                         self.convert_to_48khz.get() or
                         self.use_24bit.get() or
-                        self.normalize_audio.get()
+                        self.normalize_audio.get() or
+                        self.enable_denoise.get() or
+                        (self.enable_vst3.get() and self.vst3_plugins) or
+                        file_needs_conversion  # Always process if conversion is needed
                     )
                     
                     # Process audio file if enabled (process the copied file)
@@ -1839,11 +2688,23 @@ class ToolGUI:
                         self.root.after(0, lambda: self.music_player.unload_file())
                         time.sleep(0.3)
                         
-                        # Handle AFLAC to FLAC conversion in filename
+                        # Handle lossless to FLAC conversion in filename (AFLAC, AIFF/AIF, and ALAC M4A)
                         audio_output_path = new_path
-                        if self.convert_aflac_to_flac.get() and new_path.suffix.lower() == '.aflac':
+                        # Check if original file is ALAC M4A (will be converted to FLAC)
+                        is_alac_original = (audio_file.suffix.lower() == '.m4a' and self._check_if_alac(audio_file))
+                        
+                        if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
                             audio_output_path = new_path.with_suffix('.flac')
-                            # Handle conflicts
+                        elif is_alac_original:
+                            # Original file is ALAC M4A - convert to FLAC
+                            # new_path should already be .flac if we updated it before copying
+                            if new_path.suffix.lower() != '.flac':
+                                audio_output_path = new_path.with_suffix('.flac')
+                            else:
+                                audio_output_path = new_path  # Already .flac
+                        
+                        # Handle conflicts for converted files
+                        if audio_output_path != new_path:
                             counter = 1
                             original_audio_path = audio_output_path
                             while audio_output_path.exists():
@@ -1862,6 +2723,18 @@ class ToolGUI:
                                 aufs_target_value = -13.0
                                 print(f"  - Warning: Invalid AUFS target, using default: {aufs_target_value}")
                             
+                            # Get denoising parameters
+                            try:
+                                noise_threshold_value = float(self.noise_threshold.get())
+                            except (ValueError, TypeError):
+                                noise_threshold_value = 0.15
+                            
+                            try:
+                                prop_decrease_value = float(self.prop_decrease.get())
+                                prop_decrease_value = max(0.0, min(1.0, prop_decrease_value))  # Clamp to 0-1
+                            except (ValueError, TypeError):
+                                prop_decrease_value = 0.5
+                            
                             success = process_audio_file(
                                 input_path=new_path,
                                 output_path=audio_output_path,
@@ -1870,7 +2743,17 @@ class ToolGUI:
                                 convert_to_mono=self.convert_to_mono.get(),
                                 convert_to_48khz=self.convert_to_48khz.get(),
                                 use_24bit=self.use_24bit.get(),
-                                normalize=self.normalize_audio.get()
+                                normalize=self.normalize_audio.get(),
+                                denoise=self.enable_denoise.get(),
+                                denoise_strength=self.denoise_strength.get(),
+                                auto_detect_noise=self.auto_detect_noise.get(),
+                                prompt_user=self.custom_input if self.auto_detect_noise.get() else None,
+                                noise_threshold=noise_threshold_value,
+                                denoise_stationary=self.denoise_stationary.get(),
+                                prop_decrease=prop_decrease_value,
+                                use_noise_sample=self.use_noise_sample.get(),
+                                vst3_plugins=self.vst3_plugins if self.enable_vst3.get() else None,
+                                vst3_parameters=self.vst3_parameters if self.enable_vst3.get() else None
                             )
                             if success:
                                 print(f"✓ Audio processing completed for: {audio_output_path.name}\n")
@@ -1899,15 +2782,19 @@ class ToolGUI:
                         self.root.after(0, lambda: self.music_player.unload_file())
                         time.sleep(0.2)
                         
+                        # Determine the file to write metadata to
+                        # If audio was processed and converted, use the processed file (which may be FLAC)
+                        metadata_file = new_path_resolved if 'new_path_resolved' in locals() else new_path
+                        
                         try:
-                            tag_updater.write_metadata(new_path, new_metadata)
-                            print(f"Updated metadata for: {new_filename}")
+                            tag_updater.write_metadata(metadata_file, new_metadata)
+                            print(f"Updated metadata for: {Path(metadata_file).name}")
                         except PermissionError as pe:
-                            print(f"Permission denied writing metadata for {new_filename}: {str(pe)}")
+                            print(f"Permission denied writing metadata for {Path(metadata_file).name}: {str(pe)}")
                             print("File may still be locked. Retrying after delay...")
                             time.sleep(0.5)
-                            tag_updater.write_metadata(new_path, new_metadata)
-                            print(f"Successfully updated metadata for: {new_filename} on retry")
+                            tag_updater.write_metadata(metadata_file, new_metadata)
+                            print(f"Successfully updated metadata for: {Path(metadata_file).name} on retry")
                         except Exception as meta_error:
                             print(f"Error updating metadata for {new_filename}: {str(meta_error)}")
                             import traceback

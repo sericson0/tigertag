@@ -213,11 +213,161 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
         return None
     
     try:
+        file_ext = input_path.suffix.lower()
+        
+        # Handle AIFF files explicitly (they use ID3 tags but need special handling)
+        if file_ext in ['.aif', '.aiff', '.aifc']:
+            print(f"  - Attempting to extract album art from AIFF file: {input_path.name}")
+            # Try multiple methods to extract album art from AIFF
+            methods = []
+            
+            # Method 1: Use ID3 class directly (most reliable for ID3v2 tags)
+            try:
+                from mutagen.id3 import ID3, ID3NoHeaderError, APIC
+                try:
+                    id3_tags = ID3(str(input_path))
+                    print(f"  - Successfully loaded ID3 tags using ID3 class")
+                    methods.append(("ID3 class", id3_tags))
+                except ID3NoHeaderError:
+                    print(f"  - AIFF file has no ID3 tags (ID3NoHeaderError)")
+                except Exception as e:
+                    print(f"  - Error loading ID3 tags from AIFF using ID3 class: {e}")
+            except Exception as e:
+                print(f"  - Could not import ID3: {e}")
+            
+            # Method 2: Use AIFF class and access tags
+            try:
+                from mutagen.aiff import AIFF
+                audio_file = AIFF(str(input_path))
+                if audio_file.tags is not None:
+                    print(f"  - Successfully loaded ID3 tags using AIFF class")
+                    methods.append(("AIFF class", audio_file.tags))
+                else:
+                    print(f"  - AIFF class loaded but file has no tags")
+            except Exception as e:
+                print(f"  - Could not load AIFF class: {e}")
+            
+            # Method 3: Use MutagenFile as fallback (less reliable for AIFF)
+            try:
+                audio_file_mf = MutagenFile(str(input_path))
+                if audio_file_mf is not None:
+                    print(f"  - Successfully loaded using MutagenFile")
+                    methods.append(("MutagenFile", audio_file_mf))
+            except Exception as e:
+                print(f"  - Could not load with MutagenFile: {e}")
+            
+            if not methods:
+                print(f"  - ✗ Could not load ID3 tags using any method")
+                return None
+            
+            # Try each method to find APIC frames
+            for method_name, tags in methods:
+                try:
+                    # Debug: Print all available keys
+                    all_keys = list(tags.keys())
+                    print(f"  - [{method_name}] Available ID3 frame keys: {all_keys}")
+                    
+                    # Look for APIC frames - they can have various keys
+                    # Try multiple approaches to find APIC frames
+                    apic_keys = []
+                    
+                    # Method 1: Check keys that start with 'APIC'
+                    for key in all_keys:
+                        if key.startswith('APIC'):
+                            apic_keys.append(key)
+                    
+                    # Method 2: Check for 'APIC:' specifically (common format)
+                    if 'APIC:' in all_keys:
+                        if 'APIC:' not in apic_keys:
+                            apic_keys.append('APIC:')
+                    
+                    # Method 3: Check for APIC frames using getall (for multiple frames)
+                    try:
+                        if hasattr(tags, 'getall'):
+                            all_apic = tags.getall('APIC')
+                            if all_apic:
+                                apic_keys.extend(['APIC'] * len(all_apic))
+                    except:
+                        pass
+                    
+                    # Method 4: Try direct access with different key formats
+                    test_keys = ['APIC', 'APIC:', 'APIC:cover', 'APIC:front cover', 'APIC:Front Cover']
+                    for test_key in test_keys:
+                        try:
+                            if test_key in tags or (hasattr(tags, 'get') and tags.get(test_key) is not None):
+                                if test_key not in apic_keys:
+                                    apic_keys.append(test_key)
+                        except:
+                            pass
+                    
+                    if apic_keys:
+                        print(f"  - Found {len(apic_keys)} APIC frame(s) in AIFF file using {method_name}: {apic_keys}")
+                        # Use the first APIC frame found (usually the cover)
+                        apic_key = apic_keys[0]
+                        apic_frame = tags[apic_key]
+                        
+                        print(f"  - APIC frame type: {type(apic_frame)}")
+                        print(f"  - APIC frame attributes: {dir(apic_frame)}")
+                        
+                        # Try different ways to access the data
+                        art_data = None
+                        
+                        # Try direct data attribute
+                        if hasattr(apic_frame, 'data'):
+                            try:
+                                art_data = apic_frame.data
+                                print(f"  - Got data from .data attribute")
+                            except Exception as e:
+                                print(f"  - Error accessing .data: {e}")
+                        
+                        # Try _data attribute
+                        if not art_data and hasattr(apic_frame, '_data'):
+                            try:
+                                art_data = apic_frame._data
+                                print(f"  - Got data from ._data attribute")
+                            except Exception as e:
+                                print(f"  - Error accessing ._data: {e}")
+                        
+                        # Try if frame is already bytes
+                        if not art_data and isinstance(apic_frame, bytes):
+                            art_data = apic_frame
+                            print(f"  - Frame is already bytes")
+                        
+                        # Try bytes conversion
+                        if not art_data and hasattr(apic_frame, '__bytes__'):
+                            try:
+                                art_data = bytes(apic_frame)
+                                print(f"  - Got data from bytes() conversion")
+                            except Exception as e:
+                                print(f"  - Error converting to bytes: {e}")
+                        
+                        # Try accessing through get_picture or similar methods
+                        if not art_data and hasattr(apic_frame, 'get_picture'):
+                            try:
+                                art_data = apic_frame.get_picture()
+                                print(f"  - Got data from get_picture()")
+                            except Exception as e:
+                                print(f"  - Error calling get_picture(): {e}")
+                        
+                        if art_data and len(art_data) > 0:
+                            print(f"  - ✓ Extracted album art from APIC frame '{apic_key}' using {method_name} ({len(art_data)} bytes)")
+                            return art_data
+                        else:
+                            print(f"  - ✗ APIC frame '{apic_key}' found but could not extract data (art_data is {type(art_data)}, length: {len(art_data) if art_data else 0})")
+                    else:
+                        if method_name == methods[-1][0]:  # Only print on last method
+                            print(f"  - No APIC frames found in AIFF file. Available frames: {all_keys}")
+                except Exception as e:
+                    print(f"  - Error extracting album art using {method_name}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+            
+            return None
+        
         audio_file = MutagenFile(str(input_path))
         if audio_file is None:
             return None
-        
-        file_ext = input_path.suffix.lower()
         
         if file_ext == '.mp3':
             # MP3 uses APIC frames in ID3 tags
@@ -301,18 +451,40 @@ def apply_album_art(output_path: Path, album_art: bytes) -> bool:
             
         elif file_ext in ['.flac', '.ogg']:
             # FLAC/OGG use PICTURE blocks
-            from mutagen.flac import Picture
-            picture = Picture()
-            picture.type = 3  # Cover (front)
-            picture.mime = 'image/jpeg'
-            if album_art.startswith(b'\x89PNG'):
-                picture.mime = 'image/png'
-            elif album_art.startswith(b'GIF'):
-                picture.mime = 'image/gif'
-            picture.data = album_art
-            audio_file.add_picture(picture)
-            audio_file.save()
-            return True
+            try:
+                from mutagen.flac import FLAC, Picture
+                # Use FLAC class directly for better compatibility
+                flac_file = FLAC(str(output_path))
+                picture = Picture()
+                picture.type = 3  # Cover (front)
+                picture.mime = 'image/jpeg'
+                if album_art.startswith(b'\x89PNG'):
+                    picture.mime = 'image/png'
+                elif album_art.startswith(b'GIF'):
+                    picture.mime = 'image/gif'
+                picture.data = album_art
+                flac_file.add_picture(picture)
+                flac_file.save()
+                return True
+            except Exception as e:
+                print(f"  - Error applying album art to FLAC: {e}")
+                # Fallback: try with MutagenFile
+                try:
+                    from mutagen.flac import Picture
+                    picture = Picture()
+                    picture.type = 3
+                    picture.mime = 'image/jpeg'
+                    if album_art.startswith(b'\x89PNG'):
+                        picture.mime = 'image/png'
+                    elif album_art.startswith(b'GIF'):
+                        picture.mime = 'image/gif'
+                    picture.data = album_art
+                    audio_file.add_picture(picture)
+                    audio_file.save()
+                    return True
+                except Exception as e2:
+                    print(f"  - Fallback also failed: {e2}")
+                    return False
             
         elif file_ext in ['.m4a', '.mp4']:
             # M4A/MP4 use covr atoms
@@ -684,6 +856,498 @@ def aufs_normalize(audio_segment: AudioSegment, target_lufs: float = -13.0) -> A
     return audio_segment
 
 
+def detect_noise_level(audio_segment: AudioSegment, sample_rate: int = 44100) -> tuple[bool, float]:
+    """
+    Detect if audio has significant noise (hiss, crackle, etc.).
+    
+    Args:
+        audio_segment: AudioSegment to analyze
+        sample_rate: Sample rate for analysis (default: 44100)
+    
+    Returns:
+        Tuple of (has_noise: bool, noise_level: float)
+        noise_level is a value between 0.0 and 1.0 indicating noise severity
+    """
+    try:
+        # Convert to numpy array for analysis
+        samples = np.array(audio_segment.get_array_of_samples())
+        if audio_segment.channels > 1:
+            # Convert to mono for analysis
+            samples = samples.reshape(-1, audio_segment.channels).mean(axis=1)
+        
+        # Normalize to -1.0 to 1.0 range
+        if audio_segment.sample_width == 1:
+            samples = samples.astype(np.float32) / 128.0 - 1.0
+        elif audio_segment.sample_width == 2:
+            samples = samples.astype(np.float32) / 32768.0
+        elif audio_segment.sample_width == 4:
+            samples = samples.astype(np.float32) / 2147483648.0
+        else:
+            samples = samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+        
+        # Calculate RMS (Root Mean Square) for overall level
+        rms = np.sqrt(np.mean(samples ** 2))
+        
+        # Calculate high-frequency content (typical of hiss/noise)
+        # Use FFT to analyze frequency content
+        from scipy import signal
+        f, psd = signal.periodogram(samples, fs=audio_segment.frame_rate, window='hann', nfft=2048)
+        
+        # Focus on high frequencies (above 5kHz) where noise is typically present
+        high_freq_mask = f > 5000
+        high_freq_energy = np.mean(psd[high_freq_mask]) if np.any(high_freq_mask) else 0
+        
+        # Calculate total energy
+        total_energy = np.mean(psd)
+        
+        # Noise indicator: ratio of high-frequency energy to total energy
+        # High ratio suggests noise/hiss
+        noise_ratio = high_freq_energy / (total_energy + 1e-10)
+        
+        # Also check for low-level constant noise (quiet sections with energy)
+        # Analyze quiet sections (below -40 dB)
+        quiet_threshold = 0.01  # -40 dB
+        quiet_samples = samples[np.abs(samples) < quiet_threshold]
+        if len(quiet_samples) > len(samples) * 0.1:  # At least 10% quiet
+            quiet_rms = np.sqrt(np.mean(quiet_samples ** 2))
+            # If quiet sections have significant energy, likely noise
+            quiet_noise_level = quiet_rms / (rms + 1e-10)
+        else:
+            quiet_noise_level = 0
+        
+        # Additional check: spectral flatness (noise tends to have flatter spectrum)
+        # Calculate spectral flatness
+        psd_nonzero = psd[psd > 0]
+        if len(psd_nonzero) > 0:
+            geometric_mean = np.exp(np.mean(np.log(psd_nonzero)))
+            arithmetic_mean = np.mean(psd_nonzero)
+            spectral_flatness = geometric_mean / (arithmetic_mean + 1e-10)
+            # High flatness (close to 1.0) suggests noise
+            flatness_indicator = min(1.0, spectral_flatness * 1.5)
+        else:
+            flatness_indicator = 0
+        
+        # Check for constant background noise (variance in quiet sections)
+        if len(quiet_samples) > len(samples) * 0.05:  # At least 5% quiet
+            quiet_variance = np.var(quiet_samples)
+            # High variance in quiet sections suggests noise
+            variance_indicator = min(1.0, quiet_variance * 100)
+        else:
+            variance_indicator = 0
+        
+        # Enhanced noise detection: check multiple frequency bands
+        # Low-mid frequencies (1-3kHz) for crackle/pops
+        mid_freq_mask = (f > 1000) & (f < 3000)
+        mid_freq_energy = np.mean(psd[mid_freq_mask]) if np.any(mid_freq_mask) else 0
+        
+        # Very high frequencies (8-12kHz) for hiss
+        very_high_freq_mask = (f > 8000) & (f < 12000)
+        very_high_freq_energy = np.mean(psd[very_high_freq_mask]) if np.any(very_high_freq_mask) else 0
+        
+        # Calculate energy ratios
+        mid_ratio = mid_freq_energy / (total_energy + 1e-10)
+        very_high_ratio = very_high_freq_energy / (total_energy + 1e-10)
+        
+        # Combine all indicators with weights
+        noise_level = min(1.0, (
+            noise_ratio * 0.25 +           # High frequency ratio
+            quiet_noise_level * 0.20 +     # Quiet section energy
+            flatness_indicator * 0.15 +     # Spectral flatness
+            variance_indicator * 0.15 +     # Quiet section variance
+            mid_ratio * 0.10 +              # Mid frequency (crackle)
+            very_high_ratio * 0.15          # Very high frequency (hiss)
+        ))
+        
+        # More sensitive threshold - consider it noisy if noise_level > 0.15 (was 0.3)
+        # This will be adjustable via noise_threshold parameter
+        has_noise = noise_level > 0.15  # Default threshold, can be overridden
+        
+        return has_noise, noise_level
+        
+    except Exception as e:
+        print(f"  - Warning: Could not detect noise level: {str(e)}")
+        return False, 0.0
+
+
+def find_noise_sample(audio_segment: AudioSegment, duration_ms: int = 2000) -> Optional[np.ndarray]:
+    """
+    Find a quiet section at the beginning or end of the track to use as noise sample.
+    
+    Args:
+        audio_segment: AudioSegment to analyze
+        duration_ms: Duration of noise sample to extract (default: 2000ms)
+    
+    Returns:
+        numpy array of noise sample, or None if no suitable section found
+    """
+    try:
+        # Convert to numpy array
+        samples = np.array(audio_segment.get_array_of_samples())
+        if audio_segment.channels > 1:
+            samples = samples.reshape(-1, audio_segment.channels).mean(axis=1)
+        
+        # Normalize samples
+        if audio_segment.sample_width == 1:
+            samples = samples.astype(np.float32) / 128.0 - 1.0
+        elif audio_segment.sample_width == 2:
+            samples = samples.astype(np.float32) / 32768.0
+        elif audio_segment.sample_width == 4:
+            samples = samples.astype(np.float32) / 2147483648.0
+        else:
+            samples = samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+        
+        frame_rate = audio_segment.frame_rate
+        sample_duration = int(duration_ms * frame_rate / 1000)
+        
+        # Check beginning (first 5 seconds)
+        check_duration = min(5000, len(audio_segment))
+        check_samples = int(check_duration * frame_rate / 1000)
+        beginning_samples = samples[:check_samples]
+        
+        # Check end (last 5 seconds)
+        end_samples = samples[-check_samples:] if len(samples) > check_samples else samples
+        
+        # Calculate RMS for both sections
+        beginning_rms = np.sqrt(np.mean(beginning_samples ** 2))
+        end_rms = np.sqrt(np.mean(end_samples ** 2))
+        
+        # Threshold for "quiet" section: RMS < 0.05 (-26 dB)
+        quiet_threshold = 0.05
+        
+        # Choose the quieter section
+        if beginning_rms < quiet_threshold and beginning_rms < end_rms:
+            noise_sample = beginning_samples[:sample_duration] if len(beginning_samples) >= sample_duration else beginning_samples
+            print(f"  - Found noise sample at beginning (RMS: {beginning_rms:.4f})")
+            return noise_sample
+        elif end_rms < quiet_threshold:
+            noise_sample = end_samples[-sample_duration:] if len(end_samples) >= sample_duration else end_samples
+            print(f"  - Found noise sample at end (RMS: {end_rms:.4f})")
+            return noise_sample
+        else:
+            print(f"  - No suitable quiet section found (beginning RMS: {beginning_rms:.4f}, end RMS: {end_rms:.4f})")
+            return None
+            
+    except Exception as e:
+        print(f"  - Warning: Could not find noise sample: {str(e)}")
+        return None
+
+
+def apply_denoising(
+    audio_segment: AudioSegment,
+    strength: str = "moderate",
+    noise_sample: Optional[np.ndarray] = None,
+    sample_rate: int = 44100,
+    stationary: bool = True,
+    prop_decrease: float = 0.5
+) -> AudioSegment:
+    """
+    Apply denoising to audio segment using noisereduce library.
+    
+    Args:
+        audio_segment: AudioSegment to denoise
+        strength: Denoising strength - "light", "moderate", or "strong"
+        noise_sample: Optional noise sample array for profile-based denoising
+        sample_rate: Sample rate for processing
+        stationary: Whether to use stationary noise reduction
+        prop_decrease: Proportion of noise to reduce (0.0-1.0)
+    
+    Returns:
+        Denoised AudioSegment
+    """
+    try:
+        import noisereduce as nr
+        
+        # Convert to numpy array
+        samples = np.array(audio_segment.get_array_of_samples())
+        original_channels = audio_segment.channels
+        
+        if original_channels > 1:
+            # Process each channel separately for stereo
+            channels = samples.reshape(-1, original_channels)
+            denoised_channels = []
+            
+            for ch in range(original_channels):
+                channel_samples = channels[:, ch]
+                
+                # Normalize to float32
+                if audio_segment.sample_width == 1:
+                    channel_samples = channel_samples.astype(np.float32) / 128.0 - 1.0
+                elif audio_segment.sample_width == 2:
+                    channel_samples = channel_samples.astype(np.float32) / 32768.0
+                elif audio_segment.sample_width == 4:
+                    channel_samples = channel_samples.astype(np.float32) / 2147483648.0
+                else:
+                    channel_samples = channel_samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+                
+                # Use provided parameters (or map strength if using defaults)
+                if strength == "light" and prop_decrease == 0.5:
+                    actual_prop_decrease = 0.3
+                elif strength == "moderate" and prop_decrease == 0.5:
+                    actual_prop_decrease = 0.5
+                elif strength == "strong" and prop_decrease == 0.5:
+                    actual_prop_decrease = 0.7
+                else:
+                    actual_prop_decrease = prop_decrease
+                
+                actual_stationary = stationary
+                
+                # Apply denoising
+                if noise_sample is not None:
+                    # Use provided noise sample for profile-based denoising
+                    denoised = nr.reduce_noise(
+                        y=channel_samples,
+                        sr=audio_segment.frame_rate,
+                        y_noise=noise_sample,
+                        stationary=actual_stationary,
+                        prop_decrease=actual_prop_decrease
+                    )
+                else:
+                    # Automatic noise reduction
+                    denoised = nr.reduce_noise(
+                        y=channel_samples,
+                        sr=audio_segment.frame_rate,
+                        stationary=actual_stationary,
+                        prop_decrease=actual_prop_decrease
+                    )
+                
+                # Convert back to int16
+                denoised = np.clip(denoised, -1.0, 1.0)
+                if audio_segment.sample_width == 2:
+                    denoised = (denoised * 32768.0).astype(np.int16)
+                elif audio_segment.sample_width == 1:
+                    denoised = ((denoised + 1.0) * 128.0).astype(np.uint8)
+                elif audio_segment.sample_width == 4:
+                    denoised = (denoised * 2147483648.0).astype(np.int32)
+                
+                denoised_channels.append(denoised)
+            
+            # Recombine channels
+            denoised_samples = np.column_stack(denoised_channels).flatten()
+        else:
+            # Mono processing
+            # Normalize to float32
+            if audio_segment.sample_width == 1:
+                samples = samples.astype(np.float32) / 128.0 - 1.0
+            elif audio_segment.sample_width == 2:
+                samples = samples.astype(np.float32) / 32768.0
+            elif audio_segment.sample_width == 4:
+                samples = samples.astype(np.float32) / 2147483648.0
+            else:
+                samples = samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+            
+            # Use provided parameters (or map strength if using defaults)
+            if strength == "light" and prop_decrease == 0.5:
+                actual_prop_decrease = 0.3
+            elif strength == "moderate" and prop_decrease == 0.5:
+                actual_prop_decrease = 0.5
+            elif strength == "strong" and prop_decrease == 0.5:
+                actual_prop_decrease = 0.7
+            else:
+                actual_prop_decrease = prop_decrease
+            
+            actual_stationary = stationary
+            
+            # Apply denoising
+            if noise_sample is not None:
+                denoised = nr.reduce_noise(
+                    y=samples,
+                    sr=audio_segment.frame_rate,
+                    y_noise=noise_sample,
+                    stationary=actual_stationary,
+                    prop_decrease=actual_prop_decrease
+                )
+            else:
+                denoised = nr.reduce_noise(
+                    y=samples,
+                    sr=audio_segment.frame_rate,
+                    stationary=actual_stationary,
+                    prop_decrease=actual_prop_decrease
+                )
+            
+            # Convert back to int
+            denoised = np.clip(denoised, -1.0, 1.0)
+            if audio_segment.sample_width == 2:
+                denoised_samples = (denoised * 32768.0).astype(np.int16)
+            elif audio_segment.sample_width == 1:
+                denoised_samples = ((denoised + 1.0) * 128.0).astype(np.uint8)
+            elif audio_segment.sample_width == 4:
+                denoised_samples = (denoised * 2147483648.0).astype(np.int32)
+            else:
+                denoised_samples = denoised
+        
+        # Create new AudioSegment from denoised samples
+        denoised_audio = AudioSegment(
+            denoised_samples.tobytes(),
+            frame_rate=audio_segment.frame_rate,
+            sample_width=audio_segment.sample_width,
+            channels=original_channels
+        )
+        
+        return denoised_audio
+        
+    except ImportError:
+        print("  - Error: noisereduce library not installed. Install with: pip install noisereduce")
+        return audio_segment
+    except Exception as e:
+        print(f"  - Error applying denoising: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return audio_segment
+
+
+def apply_vst3_plugins(
+    audio_segment: AudioSegment,
+    plugin_paths: List[str],
+    plugin_parameters: Optional[List[Dict[str, float]]] = None
+) -> AudioSegment:
+    """
+    Apply VST3 plugins to audio segment using pedalboard library.
+    
+    Args:
+        audio_segment: AudioSegment to process
+        plugin_paths: List of paths to VST3 plugin files (.vst3)
+        plugin_parameters: Optional list of parameter dictionaries for each plugin.
+                          Each dict maps parameter names to values.
+    
+    Returns:
+        Processed AudioSegment
+    """
+    try:
+        import pedalboard
+        from pedalboard import Pedalboard, Plugin
+        
+        if not plugin_paths:
+            return audio_segment
+        
+        # Convert AudioSegment to numpy array
+        samples = np.array(audio_segment.get_array_of_samples())
+        original_channels = audio_segment.channels
+        sample_rate = audio_segment.frame_rate
+        
+        # Reshape for multi-channel
+        if original_channels > 1:
+            samples = samples.reshape(-1, original_channels)
+        else:
+            samples = samples.reshape(-1, 1)
+        
+        # Normalize to float32 (-1.0 to 1.0 range)
+        if audio_segment.sample_width == 1:
+            samples = samples.astype(np.float32) / 128.0 - 1.0
+        elif audio_segment.sample_width == 2:
+            samples = samples.astype(np.float32) / 32768.0
+        elif audio_segment.sample_width == 4:
+            samples = samples.astype(np.float32) / 2147483648.0
+        else:
+            samples = samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
+        
+        # Create pedalboard with plugins
+        plugins = []
+        for i, plugin_path in enumerate(plugin_paths):
+            if not Path(plugin_path).exists():
+                print(f"  - Warning: VST3 plugin not found: {plugin_path}")
+                continue
+            
+            try:
+                # Try different methods to load the plugin based on pedalboard version
+                plugin = None
+                plugin_file = Path(plugin_path)
+                
+                # Method 1: Try pedalboard.load_plugin() (newer API)
+                if hasattr(pedalboard, 'load_plugin'):
+                    try:
+                        plugin = pedalboard.load_plugin(str(plugin_file.resolve()))
+                    except Exception:
+                        pass
+                
+                # Method 2: Try Plugin() with string path
+                if plugin is None:
+                    try:
+                        plugin = Plugin(str(plugin_file.resolve()))
+                    except (TypeError, ValueError):
+                        # Method 3: Try Plugin() with Path object
+                        try:
+                            plugin = Plugin(plugin_file)
+                        except (TypeError, ValueError):
+                            # Method 4: Try with just the filename (if in VST3 search path)
+                            try:
+                                plugin = Plugin(plugin_file.name)
+                            except (TypeError, ValueError) as e:
+                                raise ValueError(f"Could not load plugin '{plugin_file.name}'. "
+                                               f"Please ensure the plugin is in a standard VST3 location "
+                                               f"or provide the full path. Error: {e}")
+                
+                if plugin is None:
+                    raise ValueError(f"Plugin loading returned None for: {plugin_path}")
+                
+                # Apply parameters if provided
+                if plugin_parameters and i < len(plugin_parameters):
+                    params = plugin_parameters[i]
+                    for param_name, param_value in params.items():
+                        try:
+                            setattr(plugin, param_name, param_value)
+                        except (AttributeError, ValueError) as e:
+                            print(f"  - Warning: Could not set parameter {param_name} on plugin {Path(plugin_path).name}: {e}")
+                
+                plugins.append(plugin)
+                print(f"  - Loaded VST3 plugin: {Path(plugin_path).name}")
+            except Exception as e:
+                print(f"  - Error loading VST3 plugin {Path(plugin_path).name}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        if not plugins:
+            print("  - No valid VST3 plugins loaded, skipping VST3 processing")
+            return audio_segment
+        
+        # Create pedalboard and process
+        board = Pedalboard(plugins)
+        processed_samples = board(samples, sample_rate)
+        
+        # Ensure output is 2D (samples, channels)
+        if processed_samples.ndim == 1:
+            processed_samples = processed_samples.reshape(-1, 1)
+        
+        # Clip to valid range
+        processed_samples = np.clip(processed_samples, -1.0, 1.0)
+        
+        # Convert back to original bit depth
+        if audio_segment.sample_width == 2:
+            processed_samples = (processed_samples * 32768.0).astype(np.int16)
+        elif audio_segment.sample_width == 1:
+            processed_samples = ((processed_samples + 1.0) * 128.0).astype(np.uint8)
+        elif audio_segment.sample_width == 4:
+            processed_samples = (processed_samples * 2147483648.0).astype(np.int32)
+        else:
+            processed_samples = (processed_samples * (2.0 ** (audio_segment.sample_width * 8 - 1))).astype(np.int32)
+        
+        # Flatten for AudioSegment
+        if original_channels > 1:
+            processed_samples = processed_samples.flatten()
+        else:
+            processed_samples = processed_samples.flatten()
+        
+        # Create new AudioSegment
+        processed_audio = AudioSegment(
+            processed_samples.tobytes(),
+            frame_rate=sample_rate,
+            sample_width=audio_segment.sample_width,
+            channels=original_channels
+        )
+        
+        print(f"  - Applied {len(plugins)} VST3 plugin(s)")
+        return processed_audio
+        
+    except ImportError:
+        print("  - Error: pedalboard library not installed. Install with: pip install pedalboard")
+        return audio_segment
+    except Exception as e:
+        print(f"  - Error applying VST3 plugins: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return audio_segment
+
+
 def process_audio_file(
     input_path: Path, 
     output_path: Path, 
@@ -692,7 +1356,17 @@ def process_audio_file(
     convert_to_mono: bool = False,
     convert_to_48khz: bool = False,
     use_24bit: bool = False,
-    normalize: bool = False
+    normalize: bool = False,
+    denoise: bool = False,
+    denoise_strength: str = "moderate",
+    auto_detect_noise: bool = True,
+    prompt_user: Optional[callable] = None,
+    noise_threshold: float = 0.15,
+    denoise_stationary: bool = True,
+    prop_decrease: float = 0.5,
+    use_noise_sample: bool = True,
+    vst3_plugins: Optional[List[str]] = None,
+    vst3_parameters: Optional[List[Dict[str, float]]] = None
 ) -> bool:
     """
     Process a single audio file with optional transformations.
@@ -701,7 +1375,7 @@ def process_audio_file(
         input_path: Path to input audio file
         output_path: Path to output audio file
         target_lufs: Target LUFS for normalization (default: -13.0)
-        convert_to_flac: If True, convert AFLAC files to FLAC
+        convert_to_flac: If True, convert lossless files (AFLAC, AIFF) to FLAC
         convert_to_mono: If True, convert stereo to mono
         convert_to_48khz: If True, convert sample rate to 48kHz
         use_24bit: If True, export with 24-bit depth
@@ -724,17 +1398,53 @@ def process_audio_file(
             print(f"  - Extracted metadata: {', '.join(metadata.keys())[:50]}...")
         if album_art:
             print(f"  - Extracted album art ({len(album_art)} bytes)")
+        else:
+            print(f"  - No album art found in input file")
         
-        # Handle AFLAC to FLAC conversion if requested
+        # Handle lossless to FLAC conversion if requested (AFLAC, AIFF/AIF, and ALAC M4A)
         file_ext = input_path.suffix.lower()
-        if convert_to_flac and file_ext == '.aflac':
-            # Convert AFLAC to FLAC by renaming extension
-            # Note: This assumes AFLAC is just FLAC with a different extension
-            # If AFLAC is a different format, we'll need to handle it differently
-            print(f"  - Converting AFLAC to FLAC")
+        
+        # Check if M4A file is ALAC (lossless) - convert to FLAC
+        is_alac = False
+        if file_ext == '.m4a':
+            try:
+                # Use ffprobe to check codec
+                probe_cmd = [
+                    'ffprobe', '-v', 'error', '-select_streams', 'a:0',
+                    '-show_entries', 'stream=codec_name',
+                    '-of', 'default=noprint_wrappers=1:nokey=1',
+                    str(input_path)
+                ]
+                probe_result = subprocess.run(
+                    probe_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                codec_name = probe_result.stdout.strip().lower() if probe_result.returncode == 0 else None
+                if codec_name == 'alac':
+                    is_alac = True
+                    print(f"  - Detected ALAC (lossless) M4A file - will convert to FLAC")
+            except Exception as e:
+                print(f"  - Could not detect M4A codec (assuming AAC): {e}")
+        
+        if convert_to_flac and file_ext in ('.aflac', '.aiff', '.aif'):
+            # Convert lossless formats to FLAC
+            if file_ext == '.aflac':
+                print(f"  - Converting AFLAC to FLAC")
+            elif file_ext in ('.aiff', '.aif'):
+                print(f"  - Converting AIFF to FLAC")
             file_ext = '.flac'
             # Update output path to use .flac extension
-            if output_path.suffix.lower() in ('.aflac', '.flac'):
+            if output_path.suffix.lower() in ('.aflac', '.aiff', '.aif', '.flac'):
+                output_path = output_path.with_suffix('.flac')
+        elif is_alac:
+            # Convert ALAC M4A to FLAC
+            print(f"  - Converting ALAC M4A to FLAC")
+            file_ext = '.flac'
+            # Update output path to use .flac extension
+            if output_path.suffix.lower() in ('.m4a', '.flac'):
                 output_path = output_path.with_suffix('.flac')
         
         # Check if FFmpeg is required for this file type
@@ -775,18 +1485,73 @@ def process_audio_file(
             audio = audio.set_frame_rate(48000)
             print(f"  - Converted sample rate to 48kHz")
         
-        # 3. Normalize using AUFS (if requested)
+        # 3. Denoise (if requested) - do this before normalization to avoid amplifying noise
+        if denoise:
+            should_denoise = True
+            
+            # Auto-detect noise and prompt user if enabled
+            if auto_detect_noise and prompt_user:
+                has_noise, noise_level = detect_noise_level(audio)
+                # Use custom threshold if provided
+                has_noise = noise_level > noise_threshold
+                
+                if has_noise:
+                    print(f"  - Detected noise level: {noise_level:.2%} (threshold: {noise_threshold:.2%})")
+                    # Prompt user
+                    response = prompt_user(
+                        f"Detected noise in {input_path.name} (level: {noise_level:.1%}). Apply denoising? (y/n): "
+                    )
+                    should_denoise = response and response.lower().strip() in ('y', 'yes', '1', '')
+                else:
+                    print(f"  - No significant noise detected (level: {noise_level:.2%}, threshold: {noise_threshold:.2%})")
+                    should_denoise = False
+            
+            if should_denoise:
+                # Try to find noise sample from quiet sections
+                noise_sample = None
+                if use_noise_sample and auto_detect_noise:
+                    noise_sample = find_noise_sample(audio)
+                
+                # Map strength to parameters if not explicitly set
+                if denoise_strength == "light":
+                    actual_stationary = denoise_stationary
+                    actual_prop_decrease = 0.3 if prop_decrease == 0.5 else prop_decrease
+                elif denoise_strength == "moderate":
+                    actual_stationary = denoise_stationary
+                    actual_prop_decrease = prop_decrease
+                else:  # strong
+                    actual_stationary = False  # Strong mode uses non-stationary
+                    actual_prop_decrease = 0.7 if prop_decrease == 0.5 else prop_decrease
+                
+                # Apply denoising with custom parameters
+                audio = apply_denoising(
+                    audio, 
+                    strength=denoise_strength, 
+                    noise_sample=noise_sample,
+                    stationary=actual_stationary,
+                    prop_decrease=actual_prop_decrease
+                )
+                print(f"  - Applied denoising (strength: {denoise_strength}, reduction: {actual_prop_decrease:.1%}, stationary: {actual_stationary})")
+        
+        # 4. Apply VST3 plugins (if requested) - after denoising, before normalization
+        if vst3_plugins:
+            audio = apply_vst3_plugins(audio, vst3_plugins, vst3_parameters)
+        
+        # 5. Normalize using AUFS (if requested)
         if normalize:
             audio = aufs_normalize(audio, target_lufs)
             print(f"  - Applied AUFS normalization (target: {target_lufs} LUFS)")
         
-        # 4. Export with 24-bit depth
+        # 6. Export with 24-bit depth
         # Preserve the original file extension
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Get original file extension and preserve it (or use FLAC if converted)
         original_ext = input_path.suffix.lower()
-        if convert_to_flac and original_ext == '.aflac':
+        if convert_to_flac and original_ext in ('.aflac', '.aiff', '.aif'):
+            original_ext = '.flac'
+        elif is_alac:
+            # ALAC M4A files are converted to FLAC
             original_ext = '.flac'
         if not original_ext:
             original_ext = '.wav'  # Default to wav if no extension
@@ -805,6 +1570,7 @@ def process_audio_file(
             '.m4a': 'ipod',  # pydub uses 'ipod' for m4a
             '.wma': 'wma',
             '.aiff': 'aiff',
+            '.aif': 'aiff',  # .aif is also AIFF format
             '.au': 'au'
         }
         output_format = format_map.get(original_ext, 'wav')
@@ -857,7 +1623,20 @@ def process_audio_file(
                         else:
                             ffmpeg_cmd.extend(['-codec:a', 'flac', '-compression_level', '12'])
                     elif original_ext == '.m4a' or original_ext == '.aac':
-                        ffmpeg_cmd.extend(['-codec:a', 'aac', '-b:a', '320k'])
+                        # Check if this was an ALAC file (converted to FLAC)
+                        if is_alac or original_ext == '.flac':
+                            # ALAC files are converted to FLAC (handled earlier via is_alac flag)
+                            # Use FLAC encoding instead of ALAC
+                            if use_24bit:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-sample_fmt', 's32', '-compression_level', '12'])
+                            else:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-compression_level', '12'])
+                            print(f"  - Encoding ALAC as FLAC")
+                        else:
+                            # Use high-quality AAC VBR (quality 1 = very high quality, ~256-320k average)
+                            # VBR adapts to content better than fixed bitrate and preserves quality
+                            ffmpeg_cmd.extend(['-codec:a', 'aac', '-q:a', '1'])
+                            print(f"  - Using high-quality AAC encoding (VBR, quality 1)")
                     elif original_ext == '.ogg':
                         ffmpeg_cmd.extend(['-codec:a', 'libvorbis', '-q:a', '5'])
                     elif original_ext == '.wma':
@@ -953,25 +1732,50 @@ def process_audio_file(
         
         # Apply album art separately (FFmpeg might not preserve it properly)
         if album_art:
+            print(f"  - Attempting to apply album art to {output_path.name}...")
             if apply_album_art(output_path, album_art):
                 print(f"  - Album art preserved")
             else:
                 print(f"  - Warning: Could not preserve album art")
+                print(f"  - Output file: {output_path}")
+                print(f"  - Output exists: {output_path.exists()}")
+                print(f"  - Album art size: {len(album_art)} bytes")
         
-        # If we converted AFLAC to FLAC and the original file still exists, delete it
+        # If we converted lossless to FLAC and the original file still exists, delete it
         # Only delete if processing in place (input and output are the same location)
-        if convert_to_flac and input_path.suffix.lower() == '.aflac':
+        if convert_to_flac and input_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
             if input_path.exists() and input_path != output_path:
                 # Only delete if output is in the same directory (in-place processing)
                 if input_path.parent == output_path.parent:
                     try:
                         input_path.unlink()
-                        print(f"  - Removed original AFLAC file")
+                        ext = input_path.suffix.lower()
+                        if ext == '.aflac':
+                            original_format = "AFLAC"
+                        elif ext in ('.aiff', '.aif'):
+                            original_format = "AIFF"
+                        else:
+                            original_format = "lossless"
+                        print(f"  - Removed original {original_format} file")
                     except Exception as e:
-                        print(f"  - Warning: Could not remove original AFLAC file: {str(e)}")
+                        ext = input_path.suffix.lower()
+                        if ext == '.aflac':
+                            original_format = "AFLAC"
+                        elif ext in ('.aiff', '.aif'):
+                            original_format = "AIFF"
+                        else:
+                            original_format = "lossless"
+                        print(f"  - Warning: Could not remove original {original_format} file: {str(e)}")
                 else:
                     # Output is in a different location, keep original file
-                    print(f"  - Original AFLAC file preserved (output in different folder)")
+                    ext = input_path.suffix.lower()
+                    if ext == '.aflac':
+                        original_format = "AFLAC"
+                    elif ext in ('.aiff', '.aif'):
+                        original_format = "AIFF"
+                    else:
+                        original_format = "lossless"
+                    print(f"  - Original {original_format} file preserved (output in different folder)")
         
         print(f"  ✓ Successfully processed: {output_path.name}\n")
         return True
