@@ -813,6 +813,13 @@ class ToolGUI:
         # Undo history - stack of operations that can be undone
         self.undo_history = []  # List of dicts with: original_path, new_path, chosen_idx, catalogue, audio_folder
         
+        # Pause/Resume functionality
+        self.is_paused = False
+        self.processing_thread = None
+        self.pause_event = threading.Event()  # Event to control pause/resume
+        self.pause_event.set()  # Initially set (not paused)
+        self.resume_data = None  # Store state for resuming: (folders, metadata_dict, start_year, end_year, selected_artists, current_file_index)
+        
         # Load saved config (will be loaded after widgets are created)
         self.artists = artists
         self.metadata_dict = metadata_dict
@@ -1134,8 +1141,8 @@ class ToolGUI:
         )
         self.process_audio_check.grid(row=0, column=2, padx=5)
         
-        # Run button - centered
-        self.run_button = ttk.Button(run_button_frame, text="Run TigerTag", command=self.run_tag_updater)
+        # Run/Pause/Resume button - centered
+        self.run_button = ttk.Button(run_button_frame, text="Run TigerTag", command=self.toggle_run_pause)
         self.run_button.grid(row=0, column=3, padx=(20, 0))
         
         # Undo button
@@ -1992,7 +1999,26 @@ class ToolGUI:
             
         return self.input_result
     
-    def run_tag_updater(self):
+    def toggle_run_pause(self):
+        """Toggle between Run, Pause, and Resume"""
+        if self.is_paused:
+            # Resume processing
+            self.is_paused = False
+            self.pause_event.set()  # Clear the pause event (allow processing to continue)
+            self.run_button.config(text="Pause", state='normal')
+            print("\nResuming processing...\n")
+        elif self.processing_thread and self.processing_thread.is_alive():
+            # Pause processing
+            self.is_paused = True
+            self.pause_event.clear()  # Set the pause event (block processing)
+            self.run_button.config(text="Resume", state='normal')
+            print("\nPausing processing...\n")
+        else:
+            # Start new processing
+            self.start_processing()
+    
+    def start_processing(self):
+        """Start the tag updater processing"""
         # Get folders to process
         folders_to_process = []
         if self.folder_paths:
@@ -2022,27 +2048,39 @@ class ToolGUI:
         # Get selected artists (may be empty for fuzzy matching)
         selected_artists = self.artist_selector.get_selected_artists()
             
-        # Clear console and add initial padding
-        self.console.delete(1.0, tk.END)
-        self.console.insert(tk.END, '\n' * 5)  # Add padding at the end
-        self.console.mark_set('padding_start', 'end-6l')  # Mark where padding starts
+        # Clear console and add initial padding (only if starting fresh)
+        if not self.is_paused:
+            self.console.delete(1.0, tk.END)
+            self.console.insert(tk.END, '\n' * 5)  # Add padding at the end
+            self.console.mark_set('padding_start', 'end-6l')  # Mark where padding starts
+            
+            # Reset progress
+            self._total_files_counted = False
+            self._current_total = 0
+            self._current_index = 0
+            self._update_progress(0, 0)
         
-        # Reset progress
-        self._total_files_counted = False
-        self._current_total = 0
-        self._current_index = 0
-        self._update_progress(0, 0)
+        # Reset pause state
+        self.is_paused = False
+        self.pause_event.set()  # Allow processing
         
-        # Disable run button
-        self.run_button.config(state='disabled')
+        # Update button
+        self.run_button.config(text="Pause", state='normal')
+        
+        # Store resume data
+        self.resume_data = (folders_to_process, self.metadata_dict, default_start, default_end, selected_artists, self._current_index)
         
         # Run in separate thread to keep GUI responsive
-        thread = threading.Thread(
+        self.processing_thread = threading.Thread(
             target=self.execute_tag_updater, 
             args=(folders_to_process, self.metadata_dict, default_start, default_end, selected_artists)
         )
-        thread.daemon = True
-        thread.start()
+        self.processing_thread.daemon = True
+        self.processing_thread.start()
+    
+    def run_tag_updater(self):
+        """Legacy method - redirects to start_processing"""
+        self.start_processing()
         
     def execute_tag_updater(self, folders, metadata_dict, default_start_year, default_end_year, selected_artists):
         # Redirect stdout to console
@@ -2079,6 +2117,9 @@ class ToolGUI:
             all_filename_changes = []
             
             for folder_path in folders:
+                # Check for pause
+                self.pause_event.wait()  # Wait if paused (block if pause_event is cleared)
+                
                 folder = Path(folder_path)
                 if not folder.exists() or not folder.is_dir():
                     print(f"Warning: Skipping invalid folder: {folder_path}")
@@ -2200,7 +2241,10 @@ class ToolGUI:
             sys.stdout = old_stdout
             __builtins__.input = old_input
             try:
-                self.root.after(0, lambda: self.run_button.config(state='normal'))
+                self.root.after(0, lambda: self.run_button.config(text="Run TigerTag", state='normal'))
+                self.is_paused = False
+                self.processing_thread = None
+                self.pause_event.set()
             except:
                 pass
     
@@ -2225,6 +2269,9 @@ class ToolGUI:
         file_index = current_index
         
         for audio_file in audio_files:
+            # Check for pause
+            self.pause_event.wait()  # Wait if paused (block if pause_event is cleared)
+            
             # Update progress before processing
             file_index += 1
             if total_files:

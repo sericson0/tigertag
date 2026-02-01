@@ -219,26 +219,41 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
         if file_ext in ['.aif', '.aiff', '.aifc']:
             try:
                 from mutagen.aiff import AIFF
-                from mutagen.id3 import APIC
+                from mutagen.id3 import ID3, APIC
                 audio_file = AIFF(str(input_path))
                 if audio_file.tags is None:
+                    print(f"  - AIFF file has no ID3 tags")
                     return None
-                # Look for APIC frame in ID3 tags
-                # APIC frames can have different keys like 'APIC:', 'APIC:cover', etc.
-                for key in audio_file.tags.keys():
+                
+                # Access ID3 tags directly - AIFF uses ID3v2 tags
+                id3_tags = audio_file.tags
+                
+                # Look for APIC frames - they can have various keys
+                # Try common APIC frame keys
+                apic_keys = []
+                for key in id3_tags.keys():
                     if key.startswith('APIC'):
-                        apic_frame = audio_file.tags[key]
-                        if hasattr(apic_frame, 'data'):
-                            return apic_frame.data
-                # Also try the generic 'APIC:' key
-                if 'APIC:' in audio_file.tags:
-                    apic_frame = audio_file.tags['APIC:']
+                        apic_keys.append(key)
+                
+                if apic_keys:
+                    print(f"  - Found {len(apic_keys)} APIC frame(s) in AIFF file")
+                    # Use the first APIC frame found
+                    apic_frame = id3_tags[apic_keys[0]]
                     if hasattr(apic_frame, 'data'):
-                        return apic_frame.data
+                        art_data = apic_frame.data
+                        print(f"  - Extracted album art from APIC frame '{apic_keys[0]}' ({len(art_data)} bytes)")
+                        return art_data
+                    else:
+                        print(f"  - APIC frame '{apic_keys[0]}' has no data attribute")
+                else:
+                    print(f"  - No APIC frames found in AIFF file. Available ID3 frames: {list(id3_tags.keys())[:10]}")
+                
                 return None
             except Exception as e:
                 # Fall back to MutagenFile if AIFF class fails
                 print(f"  - Warning: Could not extract album art from AIFF using AIFF class: {e}")
+                import traceback
+                traceback.print_exc()
                 pass
         
         audio_file = MutagenFile(str(input_path))
