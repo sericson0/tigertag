@@ -2629,35 +2629,43 @@ class ToolGUI:
                                   self.update_filename.get())
                     
                     if should_copy:
-                        # Check if M4A file is ALAC - update output path to FLAC before copying
+                        # Check if M4A file is ALAC - if so, don't copy yet, let process_audio_file convert it
+                        # This ensures proper format conversion and album art preservation
+                        is_alac = False
                         if audio_file.suffix.lower() == '.m4a':
                             is_alac = self._check_if_alac(audio_file)
-                            if is_alac:
-                                # Update output_path to use .flac extension
-                                output_path = output_path.with_suffix('.flac')
-                                # Re-check for conflicts with new extension
-                                counter = 1
-                                original_output_path = output_path
-                                while output_path.exists():
-                                    stem = original_output_path.stem
-                                    suffix = original_output_path.suffix
-                                    output_path = original_output_path.parent / f"{stem} ({counter}){suffix}"
-                                    counter += 1
                         
-                        print(f"\nCopying file: {old_filename} → {output_path.name}")
-                        shutil.copy2(audio_file, output_path)
-                        print(f"Original file preserved: {audio_file.name}")
-                        print(f"Updated file created: {output_path.name}")
+                        if is_alac:
+                            # For ALAC M4A files, we'll convert during processing
+                            # Don't copy the file now - process_audio_file will handle the conversion
+                            print(f"\nALAC M4A file detected: {old_filename}")
+                            print(f"File will be converted to FLAC during processing (album art will be preserved)")
+                            # Keep the original M4A path for now - process_audio_file will create the FLAC
+                            new_path = audio_file  # Use original file for processing
+                            new_path_resolved = audio_file.resolve()
+                            # The output FLAC path will be set during audio processing
+                        else:
+                            # For non-ALAC files, copy normally
+                            print(f"\nCopying file: {old_filename} → {output_path.name}")
+                            shutil.copy2(audio_file, output_path)
+                            print(f"Original file preserved: {audio_file.name}")
+                            print(f"Copied file created: {output_path.name}")
+                            
+                            new_path = output_path
+                            new_path_resolved = output_path.resolve()
                         
-                        new_path = output_path
-                        new_filename = output_path.name
-                        new_path_resolved = output_path.resolve()
+                        # Set filename for non-ALAC files
+                        if not is_alac:
+                            new_filename = new_path.name
+                        else:
+                            # For ALAC, filename will be set after conversion
+                            new_filename = old_filename
                         
                         # Update undo entry with new path
                         if 'undo_entry' in locals():
                             undo_entry['new_path'] = Path(new_path_resolved)
                         
-                        if self.update_filename.get():
+                        if self.update_filename.get() and not is_alac:
                             filename_changes.append((old_filename, new_filename))
                     else:
                         # No processing needed, skip this file
@@ -2689,19 +2697,31 @@ class ToolGUI:
                         time.sleep(0.3)
                         
                         # Handle lossless to FLAC conversion in filename (AFLAC, AIFF/AIF, and ALAC M4A)
-                        audio_output_path = new_path
-                        # Check if original file is ALAC M4A (will be converted to FLAC)
-                        is_alac_original = (audio_file.suffix.lower() == '.m4a' and self._check_if_alac(audio_file))
-                        
-                        if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
-                            audio_output_path = new_path.with_suffix('.flac')
-                        elif is_alac_original:
-                            # Original file is ALAC M4A - convert to FLAC
-                            # new_path should already be .flac if we updated it before copying
-                            if new_path.suffix.lower() != '.flac':
+                        # For ALAC M4A files, use the original file path (not a copied one) and set output to FLAC
+                        if is_alac:
+                            # Use original file for processing - it will be converted to FLAC
+                            audio_output_path = output_path.with_suffix('.flac')  # Output will be FLAC
+                            # Handle conflicts
+                            counter = 1
+                            original_audio_path = audio_output_path
+                            while audio_output_path.exists():
+                                stem = original_audio_path.stem
+                                suffix = original_audio_path.suffix
+                                audio_output_path = original_audio_path.parent / f"{stem} ({counter}){suffix}"
+                                counter += 1
+                        else:
+                            audio_output_path = new_path
+                            # Check if original file is ALAC M4A (will be converted to FLAC)
+                            is_alac_original = (audio_file.suffix.lower() == '.m4a' and self._check_if_alac(audio_file))
+                            
+                            if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
                                 audio_output_path = new_path.with_suffix('.flac')
-                            else:
-                                audio_output_path = new_path  # Already .flac
+                            elif is_alac_original:
+                                # Original file is ALAC M4A - convert to FLAC
+                                if new_path.suffix.lower() != '.flac':
+                                    audio_output_path = new_path.with_suffix('.flac')
+                                else:
+                                    audio_output_path = new_path  # Already .flac
                         
                         # Handle conflicts for converted files
                         if audio_output_path != new_path:
@@ -2713,7 +2733,9 @@ class ToolGUI:
                                 audio_output_path = original_audio_path.parent / f"{stem} ({counter}){suffix}"
                                 counter += 1
                         
-                        print(f"\nProcessing audio file: {new_filename}")
+                        # For ALAC files, show the original filename since we're processing from original
+                        processing_filename = audio_file.name if is_alac else new_filename
+                        print(f"\nProcessing audio file: {processing_filename}")
                         print(f"Output will be saved to: {audio_output_path}")
                         
                         try:
@@ -2735,8 +2757,11 @@ class ToolGUI:
                             except (ValueError, TypeError):
                                 prop_decrease_value = 0.5
                             
+                            # For ALAC files, use original file as input (not copied file) to preserve album art
+                            input_file_for_processing = audio_file if is_alac else new_path
+                            
                             success = process_audio_file(
-                                input_path=new_path,
+                                input_path=input_file_for_processing,
                                 output_path=audio_output_path,
                                 target_lufs=aufs_target_value,
                                 convert_to_flac=self.convert_aflac_to_flac.get(),
