@@ -7,7 +7,7 @@
     "output_folder_path": "C:/Users/seric/Music/Tango Discography/Anibal Troilo/Troilo Processed",
     "start_year": "1900",
     "end_year": "2050",
-    "filename_format": "orchestra last - title - singer last - year",
+    "filename_format": "leader last - title - singer last - year",
     "convert_aflac_to_flac": true,
     "convert_to_mono": true,
     "convert_to_48khz": true,

@@ -213,14 +213,40 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
         return None
     
     try:
+        file_ext = input_path.suffix.lower()
+        
+        # Handle AIFF files explicitly (they use ID3 tags but need special handling)
+        if file_ext in ['.aif', '.aiff', '.aifc']:
+            try:
+                from mutagen.aiff import AIFF
+                from mutagen.id3 import APIC
+                audio_file = AIFF(str(input_path))
+                if audio_file.tags is None:
+                    return None
+                # Look for APIC frame in ID3 tags
+                # APIC frames can have different keys like 'APIC:', 'APIC:cover', etc.
+                for key in audio_file.tags.keys():
+                    if key.startswith('APIC'):
+                        apic_frame = audio_file.tags[key]
+                        if hasattr(apic_frame, 'data'):
+                            return apic_frame.data
+                # Also try the generic 'APIC:' key
+                if 'APIC:' in audio_file.tags:
+                    apic_frame = audio_file.tags['APIC:']
+                    if hasattr(apic_frame, 'data'):
+                        return apic_frame.data
+                return None
+            except Exception as e:
+                # Fall back to MutagenFile if AIFF class fails
+                print(f"  - Warning: Could not extract album art from AIFF using AIFF class: {e}")
+                pass
+        
         audio_file = MutagenFile(str(input_path))
         if audio_file is None:
             return None
         
-        file_ext = input_path.suffix.lower()
-        
-        if file_ext == '.mp3' or file_ext in ['.aif', '.aiff', '.aifc']:
-            # MP3 and AIFF use APIC frames in ID3 tags
+        if file_ext == '.mp3':
+            # MP3 uses APIC frames in ID3 tags
             from mutagen.id3 import APIC
             if 'APIC:' in audio_file:
                 apic = audio_file['APIC:'].data
@@ -301,18 +327,40 @@ def apply_album_art(output_path: Path, album_art: bytes) -> bool:
             
         elif file_ext in ['.flac', '.ogg']:
             # FLAC/OGG use PICTURE blocks
-            from mutagen.flac import Picture
-            picture = Picture()
-            picture.type = 3  # Cover (front)
-            picture.mime = 'image/jpeg'
-            if album_art.startswith(b'\x89PNG'):
-                picture.mime = 'image/png'
-            elif album_art.startswith(b'GIF'):
-                picture.mime = 'image/gif'
-            picture.data = album_art
-            audio_file.add_picture(picture)
-            audio_file.save()
-            return True
+            try:
+                from mutagen.flac import FLAC, Picture
+                # Use FLAC class directly for better compatibility
+                flac_file = FLAC(str(output_path))
+                picture = Picture()
+                picture.type = 3  # Cover (front)
+                picture.mime = 'image/jpeg'
+                if album_art.startswith(b'\x89PNG'):
+                    picture.mime = 'image/png'
+                elif album_art.startswith(b'GIF'):
+                    picture.mime = 'image/gif'
+                picture.data = album_art
+                flac_file.add_picture(picture)
+                flac_file.save()
+                return True
+            except Exception as e:
+                print(f"  - Error applying album art to FLAC: {e}")
+                # Fallback: try with MutagenFile
+                try:
+                    from mutagen.flac import Picture
+                    picture = Picture()
+                    picture.type = 3
+                    picture.mime = 'image/jpeg'
+                    if album_art.startswith(b'\x89PNG'):
+                        picture.mime = 'image/png'
+                    elif album_art.startswith(b'GIF'):
+                        picture.mime = 'image/gif'
+                    picture.data = album_art
+                    audio_file.add_picture(picture)
+                    audio_file.save()
+                    return True
+                except Exception as e2:
+                    print(f"  - Fallback also failed: {e2}")
+                    return False
             
         elif file_ext in ['.m4a', '.mp4']:
             # M4A/MP4 use covr atoms
@@ -1226,6 +1274,8 @@ def process_audio_file(
             print(f"  - Extracted metadata: {', '.join(metadata.keys())[:50]}...")
         if album_art:
             print(f"  - Extracted album art ({len(album_art)} bytes)")
+        else:
+            print(f"  - No album art found in input file")
         
         # Handle lossless to FLAC conversion if requested (AFLAC and AIFF/AIF)
         file_ext = input_path.suffix.lower()
@@ -1509,10 +1559,14 @@ def process_audio_file(
         
         # Apply album art separately (FFmpeg might not preserve it properly)
         if album_art:
+            print(f"  - Attempting to apply album art to {output_path.name}...")
             if apply_album_art(output_path, album_art):
                 print(f"  - Album art preserved")
             else:
                 print(f"  - Warning: Could not preserve album art")
+                print(f"  - Output file: {output_path}")
+                print(f"  - Output exists: {output_path.exists()}")
+                print(f"  - Album art size: {len(album_art)} bytes")
         
         # If we converted lossless to FLAC and the original file still exists, delete it
         # Only delete if processing in place (input and output are the same location)
