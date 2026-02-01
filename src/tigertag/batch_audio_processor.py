@@ -12,6 +12,7 @@ import os
 import sys
 import subprocess
 import json
+import time
 from pathlib import Path
 from pydub import AudioSegment
 import numpy as np
@@ -392,11 +393,234 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
                     except:
                         pass
         elif file_ext in ['.m4a', '.mp4']:
-            # M4A/MP4 use covr atoms
-            if 'covr' in audio_file:
-                covr = audio_file['covr']
-                if isinstance(covr, list) and len(covr) > 0:
-                    return covr[0]
+            # M4A/MP4 use covr atoms with MP4FreeForm objects
+            # Album art can be stored in multiple locations in M4A files
+            print(f"  - Attempting to extract album art from M4A/MP4 file: {input_path.name}")
+            try:
+                from mutagen.mp4 import MP4, MP4FreeForm
+                
+                # Method 1: Use MP4 class directly (most reliable)
+                mp4_file = None
+                try:
+                    mp4_file = MP4(str(input_path))
+                    print(f"  - Successfully loaded M4A file with MP4 class")
+                    print(f"  - Available tags: {list(mp4_file.keys())}")
+                    
+                    # Check standard covr atom first
+                    if 'covr' in mp4_file:
+                        covr_list = mp4_file['covr']
+                        print(f"  - Found covr atom in M4A file using MP4 class")
+                        if isinstance(covr_list, list) and len(covr_list) > 0:
+                            for idx, covr_item in enumerate(covr_list):
+                                print(f"  - Processing covr item {idx + 1}/{len(covr_list)}, type: {type(covr_item)}")
+                                
+                                # Try different ways to extract the image data
+                                art_data = None
+                                
+                                # If it's an MP4FreeForm object, access the data
+                                if isinstance(covr_item, MP4FreeForm):
+                                    # Try accessing .data attribute
+                                    if hasattr(covr_item, 'data'):
+                                        try:
+                                            art_data = covr_item.data
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - ✓ Got data from MP4FreeForm.data attribute ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm.data: {e}")
+                                    
+                                    # Try accessing .value attribute (some versions use this)
+                                    if not art_data and hasattr(covr_item, 'value'):
+                                        try:
+                                            art_data = covr_item.value
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - ✓ Got data from MP4FreeForm.value attribute ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm.value: {e}")
+                                    
+                                    # Try bytes conversion
+                                    if not art_data:
+                                        try:
+                                            art_data = bytes(covr_item)
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - ✓ Got data from bytes() conversion of MP4FreeForm ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error converting MP4FreeForm to bytes: {e}")
+                                    
+                                    # Try accessing internal _data attribute
+                                    if not art_data and hasattr(covr_item, '_data'):
+                                        try:
+                                            art_data = covr_item._data
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - ✓ Got data from MP4FreeForm._data attribute ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm._data: {e}")
+                                
+                                # If it's already bytes
+                                elif isinstance(covr_item, bytes):
+                                    art_data = covr_item
+                                    if len(art_data) > 0:
+                                        print(f"  - ✓ covr item is already bytes ({len(art_data)} bytes)")
+                                        return art_data
+                                
+                                # Try accessing as attribute
+                                if not art_data and hasattr(covr_item, '__bytes__'):
+                                    try:
+                                        art_data = bytes(covr_item)
+                                        if art_data and len(art_data) > 0:
+                                            print(f"  - ✓ Got data from __bytes__() method ({len(art_data)} bytes)")
+                                            return art_data
+                                    except Exception as e:
+                                        print(f"  - Error calling __bytes__(): {e}")
+                                
+                                if not art_data or len(art_data) == 0:
+                                    print(f"  - ✗ covr item {idx + 1} found but could not extract data (type: {type(covr_item)})")
+                    
+                    # Check for alternative tags that might contain cover art
+                    # Some M4A files store cover art in non-standard locations
+                    alternative_tags = []
+                    for tag in mp4_file.keys():
+                        tag_lower = tag.lower()
+                        # Check for tags that might contain cover art
+                        if any(keyword in tag_lower for keyword in ['cover', 'art', 'picture', 'image', 'jpg', 'jpeg', 'png']):
+                            if tag != 'covr':  # Don't check covr again
+                                alternative_tags.append(tag)
+                    
+                    if alternative_tags:
+                        print(f"  - Found potential alternative cover art tags: {alternative_tags}")
+                        for alt_tag in alternative_tags:
+                            try:
+                                alt_data = mp4_file[alt_tag]
+                                if isinstance(alt_data, list) and len(alt_data) > 0:
+                                    alt_item = alt_data[0]
+                                    art_data = None
+                                    
+                                    if isinstance(alt_item, MP4FreeForm):
+                                        if hasattr(alt_item, 'data'):
+                                            art_data = alt_item.data
+                                        elif hasattr(alt_item, 'value'):
+                                            art_data = alt_item.value
+                                        else:
+                                            try:
+                                                art_data = bytes(alt_item)
+                                            except:
+                                                pass
+                                    elif isinstance(alt_item, bytes):
+                                        art_data = alt_item
+                                    
+                                    if art_data and len(art_data) > 0:
+                                        print(f"  - ✓ Extracted album art from alternative tag '{alt_tag}' ({len(art_data)} bytes)")
+                                        return art_data
+                            except Exception as e:
+                                print(f"  - Error checking alternative tag '{alt_tag}': {e}")
+                    
+                    # Check all tags to see if any contain image-like data
+                    print(f"  - Checking all tags for image data...")
+                    for tag in mp4_file.keys():
+                        if tag == 'covr' or tag in alternative_tags:
+                            continue  # Already checked
+                        try:
+                            tag_data = mp4_file[tag]
+                            if isinstance(tag_data, list) and len(tag_data) > 0:
+                                for item in tag_data:
+                                    # Check if item looks like image data
+                                    if isinstance(item, (bytes, MP4FreeForm)):
+                                        potential_data = None
+                                        if isinstance(item, bytes):
+                                            potential_data = item
+                                        elif isinstance(item, MP4FreeForm):
+                                            if hasattr(item, 'data'):
+                                                potential_data = item.data
+                                            elif hasattr(item, 'value'):
+                                                potential_data = item.value
+                                            else:
+                                                try:
+                                                    potential_data = bytes(item)
+                                                except:
+                                                    pass
+                                        
+                                        # Check if it looks like image data (starts with image magic bytes)
+                                        if potential_data and len(potential_data) > 100:  # Reasonable minimum size
+                                            # Check for common image file signatures
+                                            if (potential_data.startswith(b'\xff\xd8\xff') or  # JPEG
+                                                potential_data.startswith(b'\x89PNG') or  # PNG
+                                                potential_data.startswith(b'GIF') or  # GIF
+                                                potential_data.startswith(b'BM') or  # BMP
+                                                potential_data.startswith(b'RIFF') and b'WEBP' in potential_data[:20]):  # WEBP
+                                                print(f"  - ✓ Found image data in tag '{tag}' ({len(potential_data)} bytes)")
+                                                return potential_data
+                        except Exception as e:
+                            pass  # Skip tags that can't be accessed
+                
+                except Exception as e:
+                    print(f"  - Error loading M4A file with MP4 class: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                # Method 2: Fallback to MutagenFile
+                print(f"  - Trying MutagenFile as fallback...")
+                try:
+                    if 'covr' in audio_file:
+                        covr = audio_file['covr']
+                        print(f"  - Found covr atom using MutagenFile")
+                        if isinstance(covr, list) and len(covr) > 0:
+                            for idx, covr_item in enumerate(covr):
+                                print(f"  - Processing covr item {idx + 1}/{len(covr)}, type: {type(covr_item)}")
+                                
+                                art_data = None
+                                
+                                # If it's bytes, use directly
+                                if isinstance(covr_item, bytes):
+                                    art_data = covr_item
+                                    if len(art_data) > 0:
+                                        print(f"  - ✓ covr item is bytes ({len(art_data)} bytes)")
+                                        return art_data
+                                # If it's MP4FreeForm, extract data
+                                elif isinstance(covr_item, MP4FreeForm):
+                                    if hasattr(covr_item, 'data'):
+                                        try:
+                                            art_data = covr_item.data
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - ✓ Got data from MP4FreeForm.data (MutagenFile) ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm.data: {e}")
+                                    
+                                    if not art_data and hasattr(covr_item, 'value'):
+                                        try:
+                                            art_data = covr_item.value
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - ✓ Got data from MP4FreeForm.value (MutagenFile) ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm.value: {e}")
+                                    
+                                    if not art_data:
+                                        try:
+                                            art_data = bytes(covr_item)
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - ✓ Got data from bytes() conversion (MutagenFile) ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error converting to bytes: {e}")
+                                
+                                if not art_data or len(art_data) == 0:
+                                    print(f"  - ✗ covr item {idx + 1} found but could not extract data (type: {type(covr_item)})")
+                    else:
+                        print(f"  - No covr atom found using MutagenFile")
+                except Exception as e:
+                    print(f"  - Error with MutagenFile fallback: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                print(f"  - ✗ Could not extract album art from M4A file using any method")
+            except Exception as e:
+                print(f"  - Error extracting album art from M4A file: {e}")
+                import traceback
+                traceback.print_exc()
     except Exception:
         pass
     
@@ -1409,9 +1633,15 @@ def process_audio_file(
         if metadata:
             print(f"  - Extracted metadata: {', '.join(metadata.keys())[:50]}...")
         if album_art:
-            print(f"  - Extracted album art ({len(album_art)} bytes)")
+            print(f"  - ✓ Extracted album art from original file ({len(album_art)} bytes)")
         else:
-            print(f"  - No album art found in input file")
+            print(f"  - ✗ No album art found in input file")
+            # For M4A files, provide more detailed debugging
+            if input_path.suffix.lower() in ['.m4a', '.mp4']:
+                print(f"  - Debug: Attempted to extract from M4A file: {input_path.name}")
+                print(f"  - Debug: File exists: {input_path.exists()}")
+                if input_path.exists():
+                    print(f"  - Debug: File size: {input_path.stat().st_size} bytes")
         
         # Handle lossless to FLAC conversion if requested (AFLAC, AIFF/AIF, and ALAC M4A)
         file_ext = input_path.suffix.lower()
@@ -1735,7 +1965,24 @@ def process_audio_file(
             print(f"  - Note: FFmpeg not found in PATH, using pydub export (may not be exactly 24-bit)")
             audio.export(str(output_path), format=output_format)
         
-        # Apply metadata and album art to output file
+        # Wait a moment to ensure the output file is fully written and not locked
+        max_wait_time = 2.0  # Maximum time to wait in seconds
+        wait_interval = 0.1  # Check every 100ms
+        waited = 0.0
+        
+        while waited < max_wait_time:
+            try:
+                # Try to open the file in read mode to check if it's accessible
+                with open(output_path, 'rb'):
+                    break
+            except (IOError, OSError, PermissionError):
+                # File might still be locked, wait a bit and retry
+                time.sleep(wait_interval)
+                waited += wait_interval
+                if waited >= max_wait_time:
+                    print(f"  - Warning: Output file still locked after {max_wait_time}s, proceeding anyway")
+        
+        # Apply metadata first (before album art to ensure proper order)
         if metadata:
             if apply_metadata(output_path, input_path, metadata):
                 print(f"  - Metadata preserved")
@@ -1743,21 +1990,53 @@ def process_audio_file(
                 print(f"  - Warning: Could not preserve metadata")
         
         # Apply album art separately (FFmpeg might not preserve it properly)
-        # For ALL FLAC outputs, always copy album art from original file to ensure it's preserved
+        # For ALL FLAC outputs (including converted from AIFF/AIF and ALAC M4A), use the pre-extracted album art
+        # This ensures we use the album art extracted at the beginning of processing
         if output_path.suffix.lower() == '.flac':
-            print(f"  - FLAC output detected, copying album art from original file...")
-            original_album_art = extract_album_art(input_path)
+            print(f"  - FLAC output detected, applying album art from original file...")
+            # Use the album art we already extracted at the beginning, or extract fresh if needed
+            original_album_art = album_art if album_art else extract_album_art(input_path)
+            # Debug: Show what we're working with
             if original_album_art:
-                print(f"  - Extracted album art from original file ({len(original_album_art)} bytes)")
-                if apply_album_art(output_path, original_album_art):
-                    print(f"  - Album art successfully copied to FLAC file")
-                else:
-                    print(f"  - Warning: Could not apply album art to FLAC file")
-                    print(f"  - Output file: {output_path}")
-                    print(f"  - Output exists: {output_path.exists()}")
-                    print(f"  - Album art size: {len(original_album_art)} bytes")
+                print(f"  - Using {'pre-extracted' if album_art else 'freshly extracted'} album art ({len(original_album_art)} bytes)")
             else:
-                print(f"  - No album art found in original file")
+                print(f"  - Warning: No album art available for FLAC output")
+                print(f"  - Original file: {input_path.name} ({input_path.suffix.lower()})")
+            if original_album_art:
+                print(f"  - Album art ready ({len(original_album_art)} bytes), applying to FLAC file...")
+                # Retry mechanism for applying album art
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        if apply_album_art(output_path, original_album_art):
+                            print(f"  - ✓ Album art successfully applied to FLAC file")
+                            break
+                        else:
+                            if attempt < max_retries - 1:
+                                print(f"  - Attempt {attempt + 1} failed, waiting and retrying...")
+                                time.sleep(0.2 * (attempt + 1))  # Increasing delay
+                            else:
+                                print(f"  - ✗ Warning: Could not apply album art to FLAC file after {max_retries} attempts")
+                                print(f"  - Output file: {output_path}")
+                                print(f"  - Output exists: {output_path.exists()}")
+                                print(f"  - Output file size: {output_path.stat().st_size if output_path.exists() else 0} bytes")
+                                print(f"  - Album art size: {len(original_album_art)} bytes")
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            print(f"  - Attempt {attempt + 1} failed with error: {e}, retrying...")
+                            time.sleep(0.2 * (attempt + 1))
+                        else:
+                            print(f"  - ✗ Error applying album art after {max_retries} attempts: {e}")
+                            import traceback
+                            traceback.print_exc()
+            else:
+                print(f"  - ✗ No album art found in original file")
+                # For AIFF files, provide more detailed debugging
+                if input_path.suffix.lower() in ['.aif', '.aiff', '.aifc']:
+                    print(f"  - Debug: Attempted to extract from AIFF file: {input_path.name}")
+                    print(f"  - Debug: File exists: {input_path.exists()}")
+                    if input_path.exists():
+                        print(f"  - Debug: File size: {input_path.stat().st_size} bytes")
         elif album_art:
             # For other output formats, use the previously extracted album art
             print(f"  - Attempting to apply album art to {output_path.name}...")
