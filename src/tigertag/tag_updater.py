@@ -127,8 +127,14 @@ class MetaData:
         # Normalize default instrument name for comparison (handle plural forms)
         default_normalized = default.lower().rstrip('s')  # Remove trailing 's' for comparison
         
-        # Split by comma and process each player
-        for player in musicians.split(","):
+        # Split by semicolon (primary separator in CSV) or comma and process each player
+        # Use semicolon as primary separator since CSV data uses semicolons
+        if ";" in musicians:
+            players = musicians.split(";")
+        else:
+            players = musicians.split(",")
+        
+        for player in players:
             # Strip whitespace from each player entry
             player = player.strip()
             # Skip empty entries (from double commas or trailing commas)
