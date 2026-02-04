@@ -49,7 +49,8 @@ class ConsoleRedirect:
         self.text_widget.update_idletasks()
         
     def flush(self):
-        pass
+        """Flush the output - ensure text is displayed immediately."""
+        self.text_widget.update_idletasks()
 
 class MusicPlayer(tk.Frame):
     """A compact, modern music player widget - all controls on one line"""
@@ -1403,8 +1404,78 @@ class ToolGUI:
             self.output_folder_path.set(folder)
     
     def update_metadata(self):
-        print("Updating Metadata")
-        csv_to_parquet()
+        """Update metadata by converting CSV files to Parquet format."""
+        # Run in a separate thread to avoid freezing the GUI
+        def update_metadata_thread():
+            old_stdout = sys.stdout
+            try:
+                # Redirect stdout to console
+                sys.stdout = ConsoleRedirect(self.console)
+                
+                print("\n" + "=" * 80)
+                print("UPDATING METADATA")
+                print("=" * 80)
+                print("Converting CSV files to Parquet format...\n")
+                
+                # Call the conversion function
+                csv_to_parquet()
+                
+                print("\n" + "=" * 80)
+                print("Metadata update complete!")
+                print("=" * 80 + "\n")
+                
+                # Reload metadata in the main thread
+                self.root.after(0, self.reload_metadata)
+                
+            except Exception as e:
+                error_msg = f"Error updating metadata: {str(e)}"
+                print(f"\n{error_msg}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                # Restore stdout
+                sys.stdout = old_stdout
+        
+        # Start the update in a separate thread
+        thread = threading.Thread(target=update_metadata_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def reload_metadata(self):
+        """Reload metadata from parquet files and update the artist selector."""
+        try:
+            print("Reloading metadata...")
+            self.metadata_dict = load_parquet_folder()
+            self.artists = self.metadata_dict.keys()
+            
+            # Update the artist selector with new data
+            if hasattr(self, 'artist_selector'):
+                # Recreate the artist selector with new artists
+                old_selected = self.artist_selector.get_selected_artists() if hasattr(self.artist_selector, 'get_selected_artists') else []
+                
+                # Get the parent and grid info
+                parent = self.artist_selector.master
+                grid_info = self.artist_selector.grid_info()
+                
+                # Destroy old selector
+                self.artist_selector.destroy()
+                
+                # Create new selector
+                self.artist_selector = ArtistSelectorDropdown(parent, self.artists)
+                self.artist_selector.grid(**grid_info)
+                
+                # Restore selection if possible
+                if old_selected:
+                    try:
+                        self.artist_selector.set_selected_artists(old_selected)
+                    except:
+                        pass
+            
+            print("Metadata reloaded successfully!\n")
+        except Exception as e:
+            print(f"Error reloading metadata: {str(e)}\n")
+            import traceback
+            traceback.print_exc()
 
     def add_vst3_plugin(self):
         """Add a VST3 plugin to the list."""

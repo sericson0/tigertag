@@ -16,11 +16,37 @@ def load_catalogue(csv_path: Path) -> pd.DataFrame:
     return df
 
 def write_parquet_files(input_csv_folder, output_folder):
-    for file in os.listdir(input_csv_folder):
-        name = Path(file).stem
-        print(name)
-        df = load_catalogue(Path(input_csv_folder, file))
-        df.to_parquet(Path(output_folder, name + ".parquet"))
+    """Convert CSV files to Parquet format."""
+    if not input_csv_folder.exists():
+        raise FileNotFoundError(f"Input folder not found: {input_csv_folder}")
+    
+    if not output_folder.exists():
+        output_folder.mkdir(parents=True, exist_ok=True)
+        print(f"Created output folder: {output_folder}")
+    
+    csv_files = [f for f in os.listdir(input_csv_folder) if f.endswith('.csv')]
+    
+    if not csv_files:
+        print(f"No CSV files found in {input_csv_folder}")
+        return
+    
+    print(f"Found {len(csv_files)} CSV file(s) to convert:\n")
+    
+    for file in csv_files:
+        try:
+            name = Path(file).stem
+            print(f"  Processing: {name}...", end=" ", flush=True)
+            
+            csv_path = Path(input_csv_folder, file)
+            df = load_catalogue(csv_path)
+            
+            output_path = Path(output_folder, name + ".parquet")
+            df.to_parquet(output_path)
+            
+            print(f"✓ Saved to {output_path.name}")
+        except Exception as e:
+            print(f"✗ Error: {str(e)}")
+            raise
 
 
 def load_parquet_folder():
