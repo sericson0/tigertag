@@ -57,8 +57,18 @@ class MusicPlayer(tk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
         
-        # Initialize pygame mixer
-        pygame.mixer.init()
+        # Initialize pygame mixer with specific parameters to avoid ModPlug issues
+        # Use frequency, size, channels, buffer to avoid ModPlug dependency
+        try:
+            pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
+            pygame.mixer.init()
+        except Exception as e:
+            # Fallback initialization if pre_init fails
+            try:
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            except:
+                # Last resort - basic initialization
+                pygame.mixer.init()
         
         # Player state
         self.current_file = None
@@ -270,9 +280,16 @@ class MusicPlayer(tk.Frame):
     def unload_file(self):
         """Unload the current file to release file handle"""
         try:
-            if self.is_playing or self.is_paused:
-                pygame.mixer.music.stop()
-            pygame.mixer.music.unload()  # Unload the current music
+            # Check if mixer is initialized
+            if pygame.mixer.get_init():
+                if self.is_playing or self.is_paused:
+                    pygame.mixer.music.stop()
+                # Try to unload, but don't fail if it's already unloaded
+                try:
+                    pygame.mixer.music.unload()
+                except:
+                    pass  # Ignore errors if nothing is loaded
+            
             self.is_playing = False
             self.is_paused = False
             self.position = 0
@@ -304,13 +321,43 @@ class MusicPlayer(tk.Frame):
         
         # Load the file
         try:
-            pygame.mixer.music.load(str(self.current_file))
+            # Stop and unload any current music first
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()
+            
+            # Try to load the file
+            file_path_str = str(self.current_file)
+            
+            # Check file extension to handle different formats
+            file_ext = self.current_file.suffix.lower()
+            supported_formats = ['.mp3', '.ogg', '.wav', '.flac', '.m4a', '.mp4', '.aif', '.aiff']
+            
+            if file_ext not in supported_formats:
+                raise ValueError(f"Unsupported audio format: {file_ext}")
+            
+            # Load the file - catch ModPlug errors specifically
+            try:
+                pygame.mixer.music.load(file_path_str)
+            except Exception as load_error:
+                error_msg = str(load_error).lower()
+                if 'modplug' in error_msg or 'modplug_load' in error_msg:
+                    # ModPlug error - try reinitializing mixer and loading again
+                    pygame.mixer.quit()
+                    pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
+                    pygame.mixer.init()
+                    pygame.mixer.music.load(file_path_str)
+                else:
+                    raise  # Re-raise if it's a different error
+            
             # Get duration using mutagen
             from mutagen import File as MutagenFile
-            audio_file = MutagenFile(self.current_file)
-            if audio_file:
-                self.duration = audio_file.info.length if hasattr(audio_file.info, 'length') else 0
-            else:
+            try:
+                audio_file = MutagenFile(self.current_file)
+                if audio_file:
+                    self.duration = audio_file.info.length if hasattr(audio_file.info, 'length') else 0
+                else:
+                    self.duration = 0
+            except:
                 self.duration = 0
             
             # Update position slider max
@@ -319,7 +366,13 @@ class MusicPlayer(tk.Frame):
             self.position_var.set(0)
             self.update_time_label()
         except Exception as e:
-            self.file_label.config(text=f"Error: {str(e)[:30]}", fg=self.colors['danger'])
+            error_msg = str(e)
+            # Show user-friendly error message
+            if 'modplug' in error_msg.lower():
+                self.file_label.config(text="Error: Audio format not supported", fg=self.colors['danger'])
+            else:
+                self.file_label.config(text=f"Error: {error_msg[:30]}", fg=self.colors['danger'])
+            print(f"Error loading audio file: {error_msg}")
     
     def toggle_play_pause(self):
         """Toggle between play and pause"""
@@ -335,6 +388,14 @@ class MusicPlayer(tk.Frame):
         """Start or resume playback"""
         if not self.current_file:
             return
+        
+        # Ensure mixer is initialized
+        if not pygame.mixer.get_init():
+            try:
+                pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
+                pygame.mixer.init()
+            except:
+                pygame.mixer.init()
         
         try:
             if self.is_paused:
