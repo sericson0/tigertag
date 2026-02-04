@@ -1418,64 +1418,106 @@ class ToolGUI:
                 print("Converting CSV files to Parquet format...\n")
                 
                 # Call the conversion function
-                csv_to_parquet()
-                
-                print("\n" + "=" * 80)
-                print("Metadata update complete!")
-                print("=" * 80 + "\n")
-                
-                # Reload metadata in the main thread
-                self.root.after(0, self.reload_metadata)
+                try:
+                    csv_to_parquet()
+                    print("\n" + "=" * 80)
+                    print("Metadata update complete!")
+                    print("=" * 80 + "\n")
+                    
+                    # Reload metadata in the main thread with stdout still redirected
+                    self.root.after(0, lambda: self.reload_metadata_with_stdout())
+                except Exception as conv_error:
+                    error_msg = f"Error during conversion: {str(conv_error)}"
+                    print(f"\n{error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                    return
                 
             except Exception as e:
-                error_msg = f"Error updating metadata: {str(e)}"
-                print(f"\n{error_msg}")
-                import traceback
-                traceback.print_exc()
+                # Make sure we can print even if stdout redirect failed
+                try:
+                    if sys.stdout == old_stdout:
+                        sys.stdout = ConsoleRedirect(self.console)
+                    error_msg = f"Error updating metadata: {str(e)}"
+                    print(f"\n{error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                except:
+                    # Last resort - print to console widget directly
+                    self.console.insert(tk.END, f"\nError updating metadata: {str(e)}\n")
+                    self.console.see(tk.END)
             finally:
-                # Restore stdout
-                sys.stdout = old_stdout
+                # Don't restore stdout here - let reload_metadata_with_stdout handle it
+                pass
         
         # Start the update in a separate thread
         thread = threading.Thread(target=update_metadata_thread)
         thread.daemon = True
         thread.start()
     
+    def reload_metadata_with_stdout(self):
+        """Reload metadata from parquet files and update the artist selector.
+        This version ensures stdout is redirected to console."""
+        old_stdout = sys.stdout
+        try:
+            # Ensure stdout is redirected
+            sys.stdout = ConsoleRedirect(self.console)
+            
+            print("Reloading metadata...")
+            
+            try:
+                self.metadata_dict = load_parquet_folder()
+                self.artists = self.metadata_dict.keys()
+                
+                print(f"Loaded {len(self.metadata_dict)} artist dataset(s): {', '.join(sorted(self.artists))}")
+                
+                # Update the artist selector with new data
+                if hasattr(self, 'artist_selector'):
+                    # Recreate the artist selector with new artists
+                    old_selected = self.artist_selector.get_selected_artists() if hasattr(self.artist_selector, 'get_selected_artists') else []
+                    
+                    # Get the parent and grid info
+                    parent = self.artist_selector.master
+                    grid_info = self.artist_selector.grid_info()
+                    
+                    # Destroy old selector
+                    self.artist_selector.destroy()
+                    
+                    # Create new selector
+                    self.artist_selector = ArtistSelectorDropdown(parent, self.artists)
+                    self.artist_selector.grid(**grid_info)
+                    
+                    # Restore selection if possible
+                    if old_selected:
+                        try:
+                            self.artist_selector.set_selected_artists(old_selected)
+                        except:
+                            pass
+                
+                print("Metadata reloaded successfully!\n")
+            except Exception as load_error:
+                print(f"Error loading parquet files: {str(load_error)}\n")
+                import traceback
+                traceback.print_exc()
+        except Exception as e:
+            # Fallback error handling
+            try:
+                if sys.stdout == old_stdout:
+                    sys.stdout = ConsoleRedirect(self.console)
+                print(f"Error reloading metadata: {str(e)}\n")
+                import traceback
+                traceback.print_exc()
+            except:
+                self.console.insert(tk.END, f"\nError reloading metadata: {str(e)}\n")
+                self.console.see(tk.END)
+        finally:
+            # Restore stdout after reload
+            sys.stdout = old_stdout
+    
     def reload_metadata(self):
         """Reload metadata from parquet files and update the artist selector."""
-        try:
-            print("Reloading metadata...")
-            self.metadata_dict = load_parquet_folder()
-            self.artists = self.metadata_dict.keys()
-            
-            # Update the artist selector with new data
-            if hasattr(self, 'artist_selector'):
-                # Recreate the artist selector with new artists
-                old_selected = self.artist_selector.get_selected_artists() if hasattr(self.artist_selector, 'get_selected_artists') else []
-                
-                # Get the parent and grid info
-                parent = self.artist_selector.master
-                grid_info = self.artist_selector.grid_info()
-                
-                # Destroy old selector
-                self.artist_selector.destroy()
-                
-                # Create new selector
-                self.artist_selector = ArtistSelectorDropdown(parent, self.artists)
-                self.artist_selector.grid(**grid_info)
-                
-                # Restore selection if possible
-                if old_selected:
-                    try:
-                        self.artist_selector.set_selected_artists(old_selected)
-                    except:
-                        pass
-            
-            print("Metadata reloaded successfully!\n")
-        except Exception as e:
-            print(f"Error reloading metadata: {str(e)}\n")
-            import traceback
-            traceback.print_exc()
+        # This is a wrapper that redirects stdout
+        self.reload_metadata_with_stdout()
 
     def add_vst3_plugin(self):
         """Add a VST3 plugin to the list."""

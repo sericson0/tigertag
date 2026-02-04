@@ -35,7 +35,8 @@ def write_parquet_files(input_csv_folder, output_folder):
     for file in csv_files:
         try:
             name = Path(file).stem
-            print(f"  Processing: {name}...", end=" ", flush=True)
+            print(f"  Processing: {name}...", end="")
+            sys.stdout.flush()  # Ensure it's displayed
             
             csv_path = Path(input_csv_folder, file)
             df = load_catalogue(csv_path)
@@ -43,9 +44,11 @@ def write_parquet_files(input_csv_folder, output_folder):
             output_path = Path(output_folder, name + ".parquet")
             df.to_parquet(output_path)
             
-            print(f"✓ Saved to {output_path.name}")
+            print(f" ✓ Saved to {output_path.name}")
+            sys.stdout.flush()
         except Exception as e:
-            print(f"✗ Error: {str(e)}")
+            print(f" ✗ Error: {str(e)}")
+            sys.stdout.flush()
             raise
 
 
@@ -66,8 +69,39 @@ def load_parquet_folder():
     return datasets
 
 def csv_to_parquet():
-    metadata_folder = Path(Path(__file__).resolve().parent.parent.parent, "metadata")
-    write_parquet_files(Path(metadata_folder, "csv_files"), Path(metadata_folder, "parquet_files"))
+    """Convert CSV files in metadata/csv_files to Parquet format in metadata/parquet_files."""
+    try:
+        # Get the metadata folder path (3 levels up from this file: tigertag -> src -> tigertag -> metadata)
+        current_file = Path(__file__).resolve()
+        metadata_folder = current_file.parent.parent.parent / "metadata"
+        
+        input_folder = metadata_folder / "csv_files"
+        output_folder = metadata_folder / "parquet_files"
+        
+        print(f"Input folder: {input_folder}")
+        print(f"Output folder: {output_folder}\n")
+        
+        # Validate paths
+        if not metadata_folder.exists():
+            raise FileNotFoundError(
+                f"Metadata folder not found: {metadata_folder}\n"
+                f"Expected location: {metadata_folder}\n"
+                f"Current file location: {current_file}"
+            )
+        
+        if not input_folder.exists():
+            raise FileNotFoundError(
+                f"CSV input folder not found: {input_folder}\n"
+                f"Please create the folder and add CSV files to convert."
+            )
+        
+        # Convert the files
+        write_parquet_files(input_folder, output_folder)
+        
+    except Exception as e:
+        error_msg = f"Error in csv_to_parquet: {str(e)}"
+        print(error_msg)
+        raise
 
 # input_path = "C:/Users/seric/OneDrive/Documents/Princeton Tango Club/DJing/tango_metadata"
 # output_path = "C:/Users/seric/OneDrive/Documents/GitHub/tigertag/metadata"
