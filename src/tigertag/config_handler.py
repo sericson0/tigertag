@@ -20,6 +20,7 @@ def load_config() -> dict:
         "convert_to_48khz": False,
         "use_24bit": False,
         "normalize_audio": False,
+        "lossy_to_flac": True,
         "aufs_target": "-13.0",
         "output_structure": "preserve",
         "auto_select": False,
@@ -139,6 +140,7 @@ def get_audio_processing_settings() -> dict:
         "convert_to_48khz": config.get("convert_to_48khz", False),
         "use_24bit": config.get("use_24bit", False),
         "normalize_audio": config.get("normalize_audio", False),
+        "lossy_to_flac": config.get("lossy_to_flac", True),
         "aufs_target": config.get("aufs_target", "-13.0"),
     }
 

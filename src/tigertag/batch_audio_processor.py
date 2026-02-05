@@ -1110,6 +1110,36 @@ def apply_metadata(output_path: Path, input_path: Path, metadata: Dict[str, str]
     return False
 
 
+def _get_pydub_export_params(output_format: str) -> dict:
+    """
+    Get high-quality export parameters for pydub based on format.
+    Used as fallback when FFmpeg is not available.
+    
+    Args:
+        output_format: The pydub format name (e.g., 'mp3', 'ipod', 'ogg')
+    
+    Returns:
+        Dictionary of export parameters for high quality output
+    """
+    params = {}
+    
+    if output_format == 'mp3':
+        # Use 320kbps for MP3 (highest standard bitrate)
+        params['bitrate'] = '320k'
+    elif output_format in ('ipod', 'adts'):  # M4A/AAC formats
+        # Use 256kbps for AAC (transparent quality)
+        params['bitrate'] = '256k'
+    elif output_format == 'ogg':
+        # Use quality 8 for OGG Vorbis (high quality, ~256kbps)
+        params['parameters'] = ['-q:a', '8']
+    elif output_format == 'flac':
+        # Maximum compression for FLAC (lossless, so no quality loss)
+        params['parameters'] = ['-compression_level', '12']
+    # WAV and AIFF don't need special parameters (they're uncompressed)
+    
+    return params
+
+
 def check_ffmpeg_available() -> bool:
     """
     Check if FFmpeg is available in the system PATH.
@@ -1132,6 +1162,7 @@ def check_ffmpeg_available() -> bool:
 def aufs_normalize(audio_segment: AudioSegment, target_lufs: float = -13.0) -> AudioSegment:
     """
     Normalize audio using AUFS (Average Unit Full Scale) / LUFS (Loudness Units Full Scale).
+    Includes clipping prevention to avoid distortion.
     
     Args:
         audio_segment: AudioSegment to normalize
@@ -1166,6 +1197,21 @@ def aufs_normalize(audio_segment: AudioSegment, target_lufs: float = -13.0) -> A
     # Calculate gain needed
     if current_lufs != -np.inf:
         gain_db = target_lufs - current_lufs
+        
+        # CLIPPING PREVENTION: Calculate the maximum gain we can apply without clipping
+        # Find the peak amplitude in the audio
+        peak_amplitude = np.max(np.abs(samples_normalized))
+        if peak_amplitude > 0:
+            # Maximum gain before clipping = headroom in dB
+            # headroom = 20 * log10(1.0 / peak_amplitude)
+            max_gain_db = 20 * np.log10(1.0 / peak_amplitude)
+            # Leave 0.5dB headroom to be safe
+            max_gain_db -= 0.5
+            
+            if gain_db > max_gain_db:
+                print(f"  - ⚠ Clipping prevention: Limiting gain from {gain_db:.1f}dB to {max_gain_db:.1f}dB")
+                gain_db = max_gain_db
+        
         # Apply gain
         audio_segment = audio_segment.apply_gain(gain_db)
     
@@ -1692,7 +1738,8 @@ def process_audio_file(
     prop_decrease: float = 0.5,
     use_noise_sample: bool = True,
     vst3_plugins: Optional[List[str]] = None,
-    vst3_parameters: Optional[List[Dict[str, float]]] = None
+    vst3_parameters: Optional[List[Dict[str, float]]] = None,
+    lossy_to_flac: bool = False
 ) -> bool:
     """
     Process a single audio file with optional transformations.
@@ -1706,6 +1753,9 @@ def process_audio_file(
         convert_to_48khz: If True, convert sample rate to 48kHz
         use_24bit: If True, export with 24-bit depth
         normalize: If True, normalize audio using AUFS
+        lossy_to_flac: If True, convert lossy formats (M4A/AAC, MP3, OGG) to FLAC
+                       to avoid quality loss from re-encoding. Recommended when
+                       processing lossy files with mono conversion or normalization.
     
     Returns:
         True if successful, False otherwise
@@ -1761,7 +1811,19 @@ def process_audio_file(
             except Exception as e:
                 print(f"  - Could not detect M4A codec (assuming AAC): {e}")
         
-        if convert_to_flac and file_ext in ('.aflac', '.aiff', '.aif'):
+        # Define lossy formats that would suffer quality loss from re-encoding
+        lossy_formats = {'.m4a', '.aac', '.mp3', '.ogg', '.wma'}
+        is_lossy_format = file_ext in lossy_formats and not is_alac  # ALAC M4A is lossless
+        
+        # Check if we should convert lossy to FLAC to avoid re-encoding degradation
+        convert_lossy_to_flac = lossy_to_flac and is_lossy_format
+        
+        if convert_lossy_to_flac:
+            print(f"  - ⚠ LOSSY FORMAT DETECTED ({file_ext})")
+            print(f"  - Converting to FLAC to preserve quality (avoids re-encoding degradation)")
+            file_ext = '.flac'
+            output_path = output_path.with_suffix('.flac')
+        elif convert_to_flac and file_ext in ('.aflac', '.aiff', '.aif'):
             # Convert lossless formats to FLAC
             if file_ext == '.aflac':
                 print(f"  - Converting AFLAC to FLAC")
@@ -1778,6 +1840,10 @@ def process_audio_file(
             # Update output path to use .flac extension
             if output_path.suffix.lower() in ('.m4a', '.flac'):
                 output_path = output_path.with_suffix('.flac')
+        elif is_lossy_format:
+            # Warn user about quality loss when re-encoding lossy formats
+            print(f"  - ⚠ WARNING: Re-encoding lossy format ({file_ext}) will cause quality degradation!")
+            print(f"  - TIP: Enable 'Lossy to FLAC' option to preserve quality")
         
         # Check if FFmpeg is required for this file type
         # Most formats (FLAC, MP3, M4A, etc.) require FFmpeg
@@ -1880,7 +1946,10 @@ def process_audio_file(
         
         # Get original file extension and preserve it (or use FLAC if converted)
         original_ext = input_path.suffix.lower()
-        if convert_to_flac and original_ext in ('.aflac', '.aiff', '.aif'):
+        if convert_lossy_to_flac:
+            # Lossy format being converted to FLAC to preserve quality
+            original_ext = '.flac'
+        elif convert_to_flac and original_ext in ('.aflac', '.aiff', '.aif'):
             original_ext = '.flac'
         elif is_alac:
             # ALAC M4A files are converted to FLAC
@@ -1946,7 +2015,15 @@ def process_audio_file(
                     
                     # Add format-specific encoding options
                     if original_ext == '.mp3':
-                        ffmpeg_cmd.extend(['-codec:a', 'libmp3lame', '-b:a', '320k'])
+                        if convert_lossy_to_flac:
+                            # Convert lossy MP3 to FLAC to preserve quality
+                            if use_24bit:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-sample_fmt', 's32', '-compression_level', '12'])
+                            else:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-compression_level', '12'])
+                            print(f"  - Encoding lossy MP3 as FLAC (preserving quality)")
+                        else:
+                            ffmpeg_cmd.extend(['-codec:a', 'libmp3lame', '-b:a', '320k'])
                     elif original_ext == '.flac':
                         # FLAC doesn't support s24 directly - use s32 (32-bit) which FLAC supports natively
                         # FLAC will encode at 24-bit precision internally
@@ -1955,24 +2032,42 @@ def process_audio_file(
                         else:
                             ffmpeg_cmd.extend(['-codec:a', 'flac', '-compression_level', '12'])
                     elif original_ext == '.m4a' or original_ext == '.aac':
-                        # Check if this was an ALAC file (converted to FLAC)
-                        if is_alac or original_ext == '.flac':
-                            # ALAC files are converted to FLAC (handled earlier via is_alac flag)
-                            # Use FLAC encoding instead of ALAC
+                        # Check if this was an ALAC file (converted to FLAC) or lossy-to-FLAC conversion
+                        if is_alac or convert_lossy_to_flac:
+                            # ALAC files or lossy files being preserved as FLAC
                             if use_24bit:
                                 ffmpeg_cmd.extend(['-codec:a', 'flac', '-sample_fmt', 's32', '-compression_level', '12'])
                             else:
                                 ffmpeg_cmd.extend(['-codec:a', 'flac', '-compression_level', '12'])
-                            print(f"  - Encoding ALAC as FLAC")
+                            if is_alac:
+                                print(f"  - Encoding ALAC as FLAC")
+                            else:
+                                print(f"  - Encoding lossy M4A/AAC as FLAC (preserving quality)")
                         else:
                             # Use high-quality AAC VBR (quality 1 = very high quality, ~256-320k average)
                             # VBR adapts to content better than fixed bitrate and preserves quality
                             ffmpeg_cmd.extend(['-codec:a', 'aac', '-q:a', '1'])
                             print(f"  - Using high-quality AAC encoding (VBR, quality 1)")
                     elif original_ext == '.ogg':
-                        ffmpeg_cmd.extend(['-codec:a', 'libvorbis', '-q:a', '5'])
+                        if convert_lossy_to_flac:
+                            # Convert lossy OGG to FLAC to preserve quality
+                            if use_24bit:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-sample_fmt', 's32', '-compression_level', '12'])
+                            else:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-compression_level', '12'])
+                            print(f"  - Encoding lossy OGG as FLAC (preserving quality)")
+                        else:
+                            ffmpeg_cmd.extend(['-codec:a', 'libvorbis', '-q:a', '5'])
                     elif original_ext == '.wma':
-                        ffmpeg_cmd.extend(['-codec:a', 'wmav2'])
+                        if convert_lossy_to_flac:
+                            # Convert lossy WMA to FLAC to preserve quality
+                            if use_24bit:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-sample_fmt', 's32', '-compression_level', '12'])
+                            else:
+                                ffmpeg_cmd.extend(['-codec:a', 'flac', '-compression_level', '12'])
+                            print(f"  - Encoding lossy WMA as FLAC (preserving quality)")
+                        else:
+                            ffmpeg_cmd.extend(['-codec:a', 'wmav2'])
                     elif original_ext == '.aiff':
                         if use_24bit:
                             ffmpeg_cmd.extend(['-codec:a', 'pcm_s24be'])  # AIFF uses big-endian
@@ -2016,7 +2111,9 @@ def process_audio_file(
                 except FileNotFoundError:
                     # FFmpeg not found (shouldn't happen if check passed, but handle anyway)
                     print(f"  - Warning: ffmpeg not found, using pydub export (may not be exactly 24-bit)")
-                    audio.export(str(output_path), format=output_format)
+                    # Use high quality settings for pydub export to minimize quality loss
+                    export_params = _get_pydub_export_params(output_format)
+                    audio.export(str(output_path), format=output_format, **export_params)
                     # Clean up temp file if it exists
                     if temp_path.exists() and temp_path != output_path:
                         try:
@@ -2037,8 +2134,9 @@ def process_audio_file(
                         print(f"  - Standard output: {stdout_msg[:200]}")
                     print(f"  - Falling back to pydub export (may not be exactly 24-bit)")
                     
-                    # Export directly to output
-                    audio.export(str(output_path), format=output_format)
+                    # Export directly to output with high quality settings
+                    export_params = _get_pydub_export_params(output_format)
+                    audio.export(str(output_path), format=output_format, **export_params)
                     # Clean up temp file if it exists
                     if temp_path.exists() and temp_path != output_path:
                         try:
@@ -2049,11 +2147,13 @@ def process_audio_file(
             except Exception as e:
                 # If temp file creation fails, fall back to direct export
                 print(f"  - Warning: Could not create temp file, using direct export: {str(e)}")
-                audio.export(str(output_path), format=output_format)
+                export_params = _get_pydub_export_params(output_format)
+                audio.export(str(output_path), format=output_format, **export_params)
         else:
             # FFmpeg not available, use pydub export directly
             print(f"  - Note: FFmpeg not found in PATH, using pydub export (may not be exactly 24-bit)")
-            audio.export(str(output_path), format=output_format)
+            export_params = _get_pydub_export_params(output_format)
+            audio.export(str(output_path), format=output_format, **export_params)
         
         # Wait a moment to ensure the output file is fully written and not locked
         max_wait_time = 2.0  # Maximum time to wait in seconds

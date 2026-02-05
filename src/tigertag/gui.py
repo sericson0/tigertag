@@ -836,6 +836,7 @@ class ToolGUI:
         self.convert_to_48khz = tk.BooleanVar(value=False)
         self.use_24bit = tk.BooleanVar(value=False)
         self.normalize_audio = tk.BooleanVar(value=False)
+        self.lossy_to_flac = tk.BooleanVar(value=True)  # Default: True to protect quality
         self.aufs_target = tk.StringVar(value="-13.0")  # Default AUFS target
         
         # Denoising options
@@ -1030,6 +1031,9 @@ class ToolGUI:
         )
         self.audio_processing_dropdown.add_checkbox(
             "Normalize Audio", self.normalize_audio, 2, 0
+        )
+        self.audio_processing_dropdown.add_checkbox(
+            "Lossy → FLAC (preserve quality)", self.lossy_to_flac, 2, 1
         )
         
         # AUFS target input in audio processing dropdown
@@ -1304,6 +1308,7 @@ class ToolGUI:
         self.convert_to_48khz.set(audio_settings.get("convert_to_48khz", False))
         self.use_24bit.set(audio_settings.get("use_24bit", False))
         self.normalize_audio.set(audio_settings.get("normalize_audio", False))
+        self.lossy_to_flac.set(audio_settings.get("lossy_to_flac", True))
         self.aufs_target.set(audio_settings.get("aufs_target", "-13.0"))
         
         # Load output structure (map from config value to combobox value)
@@ -1354,6 +1359,7 @@ class ToolGUI:
             "convert_to_48khz": self.convert_to_48khz.get(),
             "use_24bit": self.use_24bit.get(),
             "normalize_audio": self.normalize_audio.get(),
+            "lossy_to_flac": self.lossy_to_flac.get(),
             "aufs_target": self.aufs_target.get(),
         })
         
@@ -2603,7 +2609,8 @@ class ToolGUI:
                             prop_decrease=prop_decrease_value,
                             use_noise_sample=self.use_noise_sample.get(),
                             vst3_plugins=self.vst3_plugins if self.enable_vst3.get() else None,
-                            vst3_parameters=self.vst3_parameters if self.enable_vst3.get() else None
+                            vst3_parameters=self.vst3_parameters if self.enable_vst3.get() else None,
+                            lossy_to_flac=self.lossy_to_flac.get()
                         )
                         if success:
                             print(f"✓ Audio processing completed for: {audio_output_path.name}\n")
@@ -2961,7 +2968,8 @@ class ToolGUI:
                                 prop_decrease=prop_decrease_value,
                                 use_noise_sample=self.use_noise_sample.get(),
                                 vst3_plugins=self.vst3_plugins if self.enable_vst3.get() else None,
-                                vst3_parameters=self.vst3_parameters if self.enable_vst3.get() else None
+                                vst3_parameters=self.vst3_parameters if self.enable_vst3.get() else None,
+                                lossy_to_flac=self.lossy_to_flac.get()
                             )
                             if success:
                                 print(f"✓ Audio processing completed for: {audio_output_path.name}\n")

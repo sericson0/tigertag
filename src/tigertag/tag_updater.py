@@ -788,10 +788,10 @@ def update_tags(audio_folder, catalogue):
                 new_path = update_filename(
                     audio_file, 
                     new_metadata.title,
-                    new_metadata.orchestra,
+                    new_metadata.bandleader,
                     new_metadata.year,
-                    format_type="orchestra - title - year",  # Default for non-GUI usage
-                    orchestra_last_name=new_metadata.orchestra_last_name,
+                    format_type="leader - title - year",  # Default for non-GUI usage
+                    leader_last_name=new_metadata.leader_last_name,
                     singer_last_name=new_metadata.singer_last_name,
                     )
                 new_filename = new_path.name
