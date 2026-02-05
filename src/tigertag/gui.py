@@ -49,7 +49,8 @@ class ConsoleRedirect:
         self.text_widget.update_idletasks()
         
     def flush(self):
-        pass
+        """Flush the output - ensure text is displayed immediately."""
+        self.text_widget.update_idletasks()
 
 class MusicPlayer(tk.Frame):
     """A compact, modern music player widget - all controls on one line"""
@@ -57,8 +58,18 @@ class MusicPlayer(tk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
         
-        # Initialize pygame mixer
-        pygame.mixer.init()
+        # Initialize pygame mixer with specific parameters to avoid ModPlug issues
+        # Use frequency, size, channels, buffer to avoid ModPlug dependency
+        try:
+            pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
+            pygame.mixer.init()
+        except Exception as e:
+            # Fallback initialization if pre_init fails
+            try:
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+            except:
+                # Last resort - basic initialization
+                pygame.mixer.init()
         
         # Player state
         self.current_file = None
@@ -270,9 +281,16 @@ class MusicPlayer(tk.Frame):
     def unload_file(self):
         """Unload the current file to release file handle"""
         try:
-            if self.is_playing or self.is_paused:
-                pygame.mixer.music.stop()
-            pygame.mixer.music.unload()  # Unload the current music
+            # Check if mixer is initialized
+            if pygame.mixer.get_init():
+                if self.is_playing or self.is_paused:
+                    pygame.mixer.music.stop()
+                # Try to unload, but don't fail if it's already unloaded
+                try:
+                    pygame.mixer.music.unload()
+                except:
+                    pass  # Ignore errors if nothing is loaded
+            
             self.is_playing = False
             self.is_paused = False
             self.position = 0
@@ -304,13 +322,43 @@ class MusicPlayer(tk.Frame):
         
         # Load the file
         try:
-            pygame.mixer.music.load(str(self.current_file))
+            # Stop and unload any current music first
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()
+            
+            # Try to load the file
+            file_path_str = str(self.current_file)
+            
+            # Check file extension to handle different formats
+            file_ext = self.current_file.suffix.lower()
+            supported_formats = ['.mp3', '.ogg', '.wav', '.flac', '.m4a', '.mp4', '.aif', '.aiff']
+            
+            if file_ext not in supported_formats:
+                raise ValueError(f"Unsupported audio format: {file_ext}")
+            
+            # Load the file - catch ModPlug errors specifically
+            try:
+                pygame.mixer.music.load(file_path_str)
+            except Exception as load_error:
+                error_msg = str(load_error).lower()
+                if 'modplug' in error_msg or 'modplug_load' in error_msg:
+                    # ModPlug error - try reinitializing mixer and loading again
+                    pygame.mixer.quit()
+                    pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
+                    pygame.mixer.init()
+                    pygame.mixer.music.load(file_path_str)
+                else:
+                    raise  # Re-raise if it's a different error
+            
             # Get duration using mutagen
             from mutagen import File as MutagenFile
-            audio_file = MutagenFile(self.current_file)
-            if audio_file:
-                self.duration = audio_file.info.length if hasattr(audio_file.info, 'length') else 0
-            else:
+            try:
+                audio_file = MutagenFile(self.current_file)
+                if audio_file:
+                    self.duration = audio_file.info.length if hasattr(audio_file.info, 'length') else 0
+                else:
+                    self.duration = 0
+            except:
                 self.duration = 0
             
             # Update position slider max
@@ -319,7 +367,13 @@ class MusicPlayer(tk.Frame):
             self.position_var.set(0)
             self.update_time_label()
         except Exception as e:
-            self.file_label.config(text=f"Error: {str(e)[:30]}", fg=self.colors['danger'])
+            error_msg = str(e)
+            # Show user-friendly error message
+            if 'modplug' in error_msg.lower():
+                self.file_label.config(text="Error: Audio format not supported", fg=self.colors['danger'])
+            else:
+                self.file_label.config(text=f"Error: {error_msg[:30]}", fg=self.colors['danger'])
+            print(f"Error loading audio file: {error_msg}")
     
     def toggle_play_pause(self):
         """Toggle between play and pause"""
@@ -335,6 +389,14 @@ class MusicPlayer(tk.Frame):
         """Start or resume playback"""
         if not self.current_file:
             return
+        
+        # Ensure mixer is initialized
+        if not pygame.mixer.get_init():
+            try:
+                pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
+                pygame.mixer.init()
+            except:
+                pygame.mixer.init()
         
         try:
             if self.is_paused:
@@ -806,7 +868,7 @@ class ToolGUI:
         self.artist_format = tk.StringVar(value="leader - singer")  # Default format
         
         # Toggle options for processing steps
-        self.update_metadata = tk.BooleanVar(value=True)  # Default: enabled
+        self.update_metadata_enabled = tk.BooleanVar(value=True)  # Default: enabled
         self.update_filename = tk.BooleanVar(value=True)  # Default: enabled
         self.process_audio = tk.BooleanVar(value=True)  # Default: enabled
         
@@ -1123,7 +1185,7 @@ class ToolGUI:
         self.update_metadata_check = ttk.Checkbutton(
             run_button_frame, 
             text="Update Metadata", 
-            variable=self.update_metadata
+            variable=self.update_metadata_enabled
         )
         self.update_metadata_check.grid(row=0, column=0, padx=5)
         
@@ -1342,8 +1404,120 @@ class ToolGUI:
             self.output_folder_path.set(folder)
     
     def update_metadata(self):
-        print("Updating Metadata")
-        csv_to_parquet()
+        """Update metadata by converting CSV files to Parquet format."""
+        # Run in a separate thread to avoid freezing the GUI
+        def update_metadata_thread():
+            old_stdout = sys.stdout
+            try:
+                # Redirect stdout to console
+                sys.stdout = ConsoleRedirect(self.console)
+                
+                print("\n" + "=" * 80)
+                print("UPDATING METADATA")
+                print("=" * 80)
+                print("Converting CSV files to Parquet format...\n")
+                
+                # Call the conversion function
+                try:
+                    csv_to_parquet()
+                    print("\n" + "=" * 80)
+                    print("Metadata update complete!")
+                    print("=" * 80 + "\n")
+                    
+                    # Reload metadata in the main thread with stdout still redirected
+                    self.root.after(0, lambda: self.reload_metadata_with_stdout())
+                except Exception as conv_error:
+                    error_msg = f"Error during conversion: {str(conv_error)}"
+                    print(f"\n{error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                    return
+                
+            except Exception as e:
+                # Make sure we can print even if stdout redirect failed
+                try:
+                    if sys.stdout == old_stdout:
+                        sys.stdout = ConsoleRedirect(self.console)
+                    error_msg = f"Error updating metadata: {str(e)}"
+                    print(f"\n{error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                except:
+                    # Last resort - print to console widget directly
+                    self.console.insert(tk.END, f"\nError updating metadata: {str(e)}\n")
+                    self.console.see(tk.END)
+            finally:
+                # Don't restore stdout here - let reload_metadata_with_stdout handle it
+                pass
+        
+        # Start the update in a separate thread
+        thread = threading.Thread(target=update_metadata_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def reload_metadata_with_stdout(self):
+        """Reload metadata from parquet files and update the artist selector.
+        This version ensures stdout is redirected to console."""
+        old_stdout = sys.stdout
+        try:
+            # Ensure stdout is redirected
+            sys.stdout = ConsoleRedirect(self.console)
+            
+            print("Reloading metadata...")
+            
+            try:
+                self.metadata_dict = load_parquet_folder()
+                self.artists = self.metadata_dict.keys()
+                
+                print(f"Loaded {len(self.metadata_dict)} artist dataset(s): {', '.join(sorted(self.artists))}")
+                
+                # Update the artist selector with new data
+                if hasattr(self, 'artist_selector'):
+                    # Recreate the artist selector with new artists
+                    old_selected = self.artist_selector.get_selected_artists() if hasattr(self.artist_selector, 'get_selected_artists') else []
+                    
+                    # Get the parent and grid info
+                    parent = self.artist_selector.master
+                    grid_info = self.artist_selector.grid_info()
+                    
+                    # Destroy old selector
+                    self.artist_selector.destroy()
+                    
+                    # Create new selector
+                    self.artist_selector = ArtistSelectorDropdown(parent, self.artists)
+                    self.artist_selector.grid(**grid_info)
+                    
+                    # Restore selection if possible
+                    if old_selected:
+                        try:
+                            self.artist_selector.set_selected_artists(old_selected)
+                        except:
+                            pass
+                
+                print("Metadata reloaded successfully!\n")
+            except Exception as load_error:
+                print(f"Error loading parquet files: {str(load_error)}\n")
+                import traceback
+                traceback.print_exc()
+        except Exception as e:
+            # Fallback error handling
+            try:
+                if sys.stdout == old_stdout:
+                    sys.stdout = ConsoleRedirect(self.console)
+                print(f"Error reloading metadata: {str(e)}\n")
+                import traceback
+                traceback.print_exc()
+            except:
+                self.console.insert(tk.END, f"\nError reloading metadata: {str(e)}\n")
+                self.console.see(tk.END)
+        finally:
+            # Restore stdout after reload
+            sys.stdout = old_stdout
+    
+    def reload_metadata(self):
+        """Reload metadata from parquet files and update the artist selector."""
+        # This is a wrapper that redirects stdout
+        self.reload_metadata_with_stdout()
 
     def add_vst3_plugin(self):
         """Add a VST3 plugin to the list."""
@@ -2316,7 +2490,7 @@ class ToolGUI:
             
             # Check if we only need to process audio (skip matching if metadata and filename updates are disabled)
             only_process_audio = (self.process_audio.get() and 
-                                 not self.update_metadata.get() and 
+                                 not self.update_metadata_enabled.get() and 
                                  not self.update_filename.get())
             
             if only_process_audio:
@@ -2624,40 +2798,57 @@ class ToolGUI:
                     
                     # Copy original file to output folder (original file is never modified)
                     # Only copy if we need to do something (metadata update, audio processing, or filename update)
-                    should_copy = (self.update_metadata.get() or 
+                    should_copy = (self.update_metadata_enabled.get() or 
                                   self.process_audio.get() or 
                                   self.update_filename.get())
                     
                     if should_copy:
-                        # Check if M4A file is ALAC - update output path to FLAC before copying
+                        # Check if M4A file is ALAC - if so, don't copy yet, let process_audio_file convert it
+                        # This ensures proper format conversion and album art preservation
+                        is_alac = False
                         if audio_file.suffix.lower() == '.m4a':
                             is_alac = self._check_if_alac(audio_file)
+                        
+                        # Check if AIFF file that will be converted to FLAC
+                        # We need to use the original file for processing to preserve album art
+                        is_aiff_to_flac = (self.convert_aflac_to_flac.get() and 
+                                          audio_file.suffix.lower() in ('.aiff', '.aif'))
+                        
+                        if is_alac or is_aiff_to_flac:
+                            # For ALAC M4A and AIFF files, we'll convert during processing
+                            # Don't copy the file now - process_audio_file will handle the conversion
+                            # This preserves album art by extracting from the original file
                             if is_alac:
-                                # Update output_path to use .flac extension
-                                output_path = output_path.with_suffix('.flac')
-                                # Re-check for conflicts with new extension
-                                counter = 1
-                                original_output_path = output_path
-                                while output_path.exists():
-                                    stem = original_output_path.stem
-                                    suffix = original_output_path.suffix
-                                    output_path = original_output_path.parent / f"{stem} ({counter}){suffix}"
-                                    counter += 1
+                                print(f"\nALAC M4A file detected: {old_filename}")
+                            else:
+                                print(f"\nAIFF file detected: {old_filename}")
+                            print(f"File will be converted to FLAC during processing (album art will be preserved)")
+                            # Keep the original path for now - process_audio_file will create the FLAC
+                            new_path = audio_file  # Use original file for processing
+                            new_path_resolved = audio_file.resolve()
+                            # The output FLAC path will be set during audio processing
+                        else:
+                            # For non-ALAC files, copy normally
+                            print(f"\nCopying file: {old_filename} → {output_path.name}")
+                            shutil.copy2(audio_file, output_path)
+                            print(f"Original file preserved: {audio_file.name}")
+                            print(f"Copied file created: {output_path.name}")
+                            
+                            new_path = output_path
+                            new_path_resolved = output_path.resolve()
                         
-                        print(f"\nCopying file: {old_filename} → {output_path.name}")
-                        shutil.copy2(audio_file, output_path)
-                        print(f"Original file preserved: {audio_file.name}")
-                        print(f"Updated file created: {output_path.name}")
-                        
-                        new_path = output_path
-                        new_filename = output_path.name
-                        new_path_resolved = output_path.resolve()
+                        # Set filename for non-ALAC/non-AIFF-to-FLAC files
+                        if not is_alac and not is_aiff_to_flac:
+                            new_filename = new_path.name
+                        else:
+                            # For ALAC/AIFF, filename will be set after conversion
+                            new_filename = old_filename
                         
                         # Update undo entry with new path
                         if 'undo_entry' in locals():
                             undo_entry['new_path'] = Path(new_path_resolved)
                         
-                        if self.update_filename.get():
+                        if self.update_filename.get() and not is_alac and not is_aiff_to_flac:
                             filename_changes.append((old_filename, new_filename))
                     else:
                         # No processing needed, skip this file
@@ -2689,19 +2880,31 @@ class ToolGUI:
                         time.sleep(0.3)
                         
                         # Handle lossless to FLAC conversion in filename (AFLAC, AIFF/AIF, and ALAC M4A)
-                        audio_output_path = new_path
-                        # Check if original file is ALAC M4A (will be converted to FLAC)
-                        is_alac_original = (audio_file.suffix.lower() == '.m4a' and self._check_if_alac(audio_file))
-                        
-                        if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
-                            audio_output_path = new_path.with_suffix('.flac')
-                        elif is_alac_original:
-                            # Original file is ALAC M4A - convert to FLAC
-                            # new_path should already be .flac if we updated it before copying
-                            if new_path.suffix.lower() != '.flac':
+                        # For ALAC M4A and AIFF files, use the original file path (not a copied one) and set output to FLAC
+                        if is_alac or is_aiff_to_flac:
+                            # Use original file for processing - it will be converted to FLAC
+                            audio_output_path = output_path.with_suffix('.flac')  # Output will be FLAC
+                            # Handle conflicts
+                            counter = 1
+                            original_audio_path = audio_output_path
+                            while audio_output_path.exists():
+                                stem = original_audio_path.stem
+                                suffix = original_audio_path.suffix
+                                audio_output_path = original_audio_path.parent / f"{stem} ({counter}){suffix}"
+                                counter += 1
+                        else:
+                            audio_output_path = new_path
+                            # Check if original file is ALAC M4A (will be converted to FLAC)
+                            is_alac_original = (audio_file.suffix.lower() == '.m4a' and self._check_if_alac(audio_file))
+                            
+                            if self.convert_aflac_to_flac.get() and new_path.suffix.lower() in ('.aflac', '.aiff', '.aif'):
                                 audio_output_path = new_path.with_suffix('.flac')
-                            else:
-                                audio_output_path = new_path  # Already .flac
+                            elif is_alac_original:
+                                # Original file is ALAC M4A - convert to FLAC
+                                if new_path.suffix.lower() != '.flac':
+                                    audio_output_path = new_path.with_suffix('.flac')
+                                else:
+                                    audio_output_path = new_path  # Already .flac
                         
                         # Handle conflicts for converted files
                         if audio_output_path != new_path:
@@ -2713,7 +2916,9 @@ class ToolGUI:
                                 audio_output_path = original_audio_path.parent / f"{stem} ({counter}){suffix}"
                                 counter += 1
                         
-                        print(f"\nProcessing audio file: {new_filename}")
+                        # For ALAC files, show the original filename since we're processing from original
+                        processing_filename = audio_file.name if is_alac else new_filename
+                        print(f"\nProcessing audio file: {processing_filename}")
                         print(f"Output will be saved to: {audio_output_path}")
                         
                         try:
@@ -2735,8 +2940,11 @@ class ToolGUI:
                             except (ValueError, TypeError):
                                 prop_decrease_value = 0.5
                             
+                            # For ALAC and AIFF files, use original file as input (not copied file) to preserve album art
+                            input_file_for_processing = audio_file if (is_alac or is_aiff_to_flac) else new_path
+                            
                             success = process_audio_file(
-                                input_path=new_path,
+                                input_path=input_file_for_processing,
                                 output_path=audio_output_path,
                                 target_lufs=aufs_target_value,
                                 convert_to_flac=self.convert_aflac_to_flac.get(),
@@ -2778,7 +2986,7 @@ class ToolGUI:
                             traceback.print_exc()
                     
                     # Write metadata if enabled
-                    if self.update_metadata.get():
+                    if self.update_metadata_enabled.get():
                         self.root.after(0, lambda: self.music_player.unload_file())
                         time.sleep(0.2)
                         

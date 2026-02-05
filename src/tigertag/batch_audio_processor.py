@@ -12,6 +12,7 @@ import os
 import sys
 import subprocess
 import json
+import time
 from pathlib import Path
 from pydub import AudioSegment
 import numpy as np
@@ -204,12 +205,33 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
     Extract album art/cover image from audio file.
     
     Args:
-        input_path: Path to input audio file
+        input_path: Path to input audio file (Path object or string)
     
     Returns:
         Album art image data as bytes, or None if not found
     """
     if not MUTAGEN_AVAILABLE:
+        return None
+    
+    # Ensure input_path is a Path object and resolve it
+    if not isinstance(input_path, Path):
+        input_path = Path(input_path)
+    
+    # Resolve the path to ensure it's absolute and correct
+    try:
+        input_path = input_path.resolve()
+    except Exception as e:
+        print(f"  - Warning: Could not resolve path: {e}")
+        # Try to continue with original path
+    
+    if not input_path.exists():
+        print(f"  - File does not exist: {input_path}")
+        try:
+            resolved = input_path.resolve()
+            print(f"  - Resolved path: {resolved}")
+            print(f"  - Resolved path exists: {resolved.exists()}")
+        except:
+            pass
         return None
     
     try:
@@ -257,7 +279,7 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
                 print(f"  - Could not load with MutagenFile: {e}")
             
             if not methods:
-                print(f"  - ✗ Could not load ID3 tags using any method")
+                print(f"  - FAILED: Could not load ID3 tags using any method")
                 return None
             
             # Try each method to find APIC frames
@@ -350,10 +372,10 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
                                 print(f"  - Error calling get_picture(): {e}")
                         
                         if art_data and len(art_data) > 0:
-                            print(f"  - ✓ Extracted album art from APIC frame '{apic_key}' using {method_name} ({len(art_data)} bytes)")
+                            print(f"  - SUCCESS: Extracted album art from APIC frame '{apic_key}' using {method_name} ({len(art_data)} bytes)")
                             return art_data
                         else:
-                            print(f"  - ✗ APIC frame '{apic_key}' found but could not extract data (art_data is {type(art_data)}, length: {len(art_data) if art_data else 0})")
+                            print(f"  - FAILED: APIC frame '{apic_key}' found but could not extract data (art_data is {type(art_data)}, length: {len(art_data) if art_data else 0})")
                     else:
                         if method_name == methods[-1][0]:  # Only print on last method
                             print(f"  - No APIC frames found in AIFF file. Available frames: {all_keys}")
@@ -377,26 +399,318 @@ def extract_album_art(input_path: Path) -> Optional[bytes]:
                 return apic
         elif file_ext in ['.flac', '.ogg']:
             # FLAC/OGG use PICTURE blocks in Vorbis comments
-            if hasattr(audio_file, 'pictures') and audio_file.pictures:
-                return audio_file.pictures[0].data
-            # Also try metadata key
-            for key in audio_file.keys():
-                if 'PICTURE' in key.upper() or 'COVER' in key.upper():
-                    try:
-                        pic_data = audio_file[key]
-                        if isinstance(pic_data, list) and len(pic_data) > 0:
-                            if hasattr(pic_data[0], 'data'):
-                                return pic_data[0].data
-                            elif isinstance(pic_data[0], bytes):
-                                return pic_data[0]
-                    except:
-                        pass
+            print(f"  - Attempting to extract album art from FLAC/OGG file: {input_path.name}")
+            
+            # Method 1: Use FLAC class directly (most reliable)
+            try:
+                from mutagen.flac import FLAC
+                flac_file = FLAC(str(input_path))
+                if hasattr(flac_file, 'pictures') and flac_file.pictures:
+                    print(f"  - Found {len(flac_file.pictures)} picture(s) using FLAC class")
+                    for idx, picture in enumerate(flac_file.pictures):
+                        print(f"  - Processing picture {idx + 1}/{len(flac_file.pictures)}, type: {picture.type}")
+                        if hasattr(picture, 'data') and picture.data:
+                            art_data = picture.data
+                            if len(art_data) > 0:
+                                print(f"  - SUCCESS: Extracted album art from FLAC using FLAC class ({len(art_data)} bytes)")
+                                return art_data
+                        elif hasattr(picture, 'mime'):
+                            print(f"  - Picture found but no data attribute (MIME: {picture.mime})")
+            except Exception as e:
+                print(f"  - Error loading FLAC file with FLAC class: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            # Method 2: Use MutagenFile (fallback)
+            print(f"  - Trying MutagenFile as fallback...")
+            try:
+                if hasattr(audio_file, 'pictures') and audio_file.pictures:
+                    print(f"  - Found {len(audio_file.pictures)} picture(s) using MutagenFile")
+                    for idx, picture in enumerate(audio_file.pictures):
+                        print(f"  - Processing picture {idx + 1}/{len(audio_file.pictures)}")
+                        if hasattr(picture, 'data') and picture.data:
+                            art_data = picture.data
+                            if len(art_data) > 0:
+                                print(f"  - SUCCESS: Extracted album art from FLAC using MutagenFile ({len(art_data)} bytes)")
+                                return art_data
+                
+                # Also try metadata keys
+                print(f"  - Checking metadata keys for picture data...")
+                for key in audio_file.keys():
+                    if 'PICTURE' in key.upper() or 'COVER' in key.upper():
+                        print(f"  - Found potential picture key: {key}")
+                        try:
+                            pic_data = audio_file[key]
+                            if isinstance(pic_data, list) and len(pic_data) > 0:
+                                if hasattr(pic_data[0], 'data'):
+                                    art_data = pic_data[0].data
+                                    if len(art_data) > 0:
+                                        print(f"  - SUCCESS: Extracted album art from metadata key '{key}' ({len(art_data)} bytes)")
+                                        return art_data
+                                elif isinstance(pic_data[0], bytes):
+                                    art_data = pic_data[0]
+                                    if len(art_data) > 0:
+                                        print(f"  - SUCCESS: Extracted album art from metadata key '{key}' (bytes) ({len(art_data)} bytes)")
+                                        return art_data
+                        except Exception as e:
+                            print(f"  - Error accessing metadata key '{key}': {e}")
+            except Exception as e:
+                print(f"  - Error with MutagenFile fallback: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            print(f"  - FAILED: Could not extract album art from FLAC file using any method")
         elif file_ext in ['.m4a', '.mp4']:
-            # M4A/MP4 use covr atoms
-            if 'covr' in audio_file:
-                covr = audio_file['covr']
-                if isinstance(covr, list) and len(covr) > 0:
-                    return covr[0]
+            # M4A/MP4 use covr atoms with MP4FreeForm objects
+            # Album art can be stored in multiple locations in M4A files
+            print(f"  - Attempting to extract album art from M4A/MP4 file: {input_path.name}")
+            try:
+                from mutagen.mp4 import MP4, MP4FreeForm, MP4Cover
+                
+                # Method 1: Use MP4 class directly (most reliable)
+                mp4_file = None
+                try:
+                    mp4_file = MP4(str(input_path))
+                    print(f"  - Successfully loaded M4A file with MP4 class")
+                    print(f"  - Available tags: {list(mp4_file.keys())}")
+                    
+                    # Check standard covr atom first
+                    if 'covr' in mp4_file:
+                        covr_list = mp4_file['covr']
+                        print(f"  - Found covr atom in M4A file using MP4 class")
+                        if isinstance(covr_list, list) and len(covr_list) > 0:
+                            for idx, covr_item in enumerate(covr_list):
+                                print(f"  - Processing covr item {idx + 1}/{len(covr_list)}, type: {type(covr_item)}")
+                                
+                                # Try different ways to extract the image data
+                                art_data = None
+                                
+                                # If it's an MP4Cover object (most common for covr atoms)
+                                if isinstance(covr_item, MP4Cover):
+                                    # MP4Cover IS bytes - convert directly to bytes
+                                    try:
+                                        art_data = bytes(covr_item)
+                                        if art_data and len(art_data) > 0:
+                                            print(f"  - SUCCESS: Extracted album art from MP4Cover ({len(art_data)} bytes)")
+                                            return art_data
+                                    except Exception as e:
+                                        print(f"  - Error converting MP4Cover to bytes: {e}")
+                                
+                                # If it's an MP4FreeForm object, access the data
+                                elif isinstance(covr_item, MP4FreeForm):
+                                    # Try accessing .data attribute
+                                    if hasattr(covr_item, 'data'):
+                                        try:
+                                            art_data = covr_item.data
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from MP4FreeForm.data attribute ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm.data: {e}")
+                                    
+                                    # Try accessing .value attribute (some versions use this)
+                                    if not art_data and hasattr(covr_item, 'value'):
+                                        try:
+                                            art_data = covr_item.value
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from MP4FreeForm.value attribute ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm.value: {e}")
+                                    
+                                    # Try bytes conversion
+                                    if not art_data:
+                                        try:
+                                            art_data = bytes(covr_item)
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from bytes() conversion of MP4FreeForm ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error converting MP4FreeForm to bytes: {e}")
+                                    
+                                    # Try accessing internal _data attribute
+                                    if not art_data and hasattr(covr_item, '_data'):
+                                        try:
+                                            art_data = covr_item._data
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from MP4FreeForm._data attribute ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm._data: {e}")
+                                
+                                # If it's already bytes
+                                elif isinstance(covr_item, bytes):
+                                    art_data = covr_item
+                                    if len(art_data) > 0:
+                                        print(f"  - SUCCESS: covr item is already bytes ({len(art_data)} bytes)")
+                                        return art_data
+                                
+                                # Try accessing as attribute
+                                if not art_data and hasattr(covr_item, '__bytes__'):
+                                    try:
+                                        art_data = bytes(covr_item)
+                                        if art_data and len(art_data) > 0:
+                                            print(f"  - SUCCESS: Got data from __bytes__() method ({len(art_data)} bytes)")
+                                            return art_data
+                                    except Exception as e:
+                                        print(f"  - Error calling __bytes__(): {e}")
+                                
+                                if not art_data or len(art_data) == 0:
+                                    print(f"  - FAILED: covr item {idx + 1} found but could not extract data (type: {type(covr_item)})")
+                    
+                    # Check for alternative tags that might contain cover art
+                    # Some M4A files store cover art in non-standard locations
+                    alternative_tags = []
+                    for tag in mp4_file.keys():
+                        tag_lower = tag.lower()
+                        # Check for tags that might contain cover art
+                        if any(keyword in tag_lower for keyword in ['cover', 'art', 'picture', 'image', 'jpg', 'jpeg', 'png']):
+                            if tag != 'covr':  # Don't check covr again
+                                alternative_tags.append(tag)
+                    
+                    if alternative_tags:
+                        print(f"  - Found potential alternative cover art tags: {alternative_tags}")
+                        for alt_tag in alternative_tags:
+                            try:
+                                alt_data = mp4_file[alt_tag]
+                                if isinstance(alt_data, list) and len(alt_data) > 0:
+                                    alt_item = alt_data[0]
+                                    art_data = None
+                                    
+                                    if isinstance(alt_item, MP4FreeForm):
+                                        if hasattr(alt_item, 'data'):
+                                            art_data = alt_item.data
+                                        elif hasattr(alt_item, 'value'):
+                                            art_data = alt_item.value
+                                        else:
+                                            try:
+                                                art_data = bytes(alt_item)
+                                            except:
+                                                pass
+                                    elif isinstance(alt_item, bytes):
+                                        art_data = alt_item
+                                    
+                                    if art_data and len(art_data) > 0:
+                                        print(f"  - SUCCESS: Extracted album art from alternative tag '{alt_tag}' ({len(art_data)} bytes)")
+                                        return art_data
+                            except Exception as e:
+                                print(f"  - Error checking alternative tag '{alt_tag}': {e}")
+                    
+                    # Check all tags to see if any contain image-like data
+                    print(f"  - Checking all tags for image data...")
+                    for tag in mp4_file.keys():
+                        if tag == 'covr' or tag in alternative_tags:
+                            continue  # Already checked
+                        try:
+                            tag_data = mp4_file[tag]
+                            if isinstance(tag_data, list) and len(tag_data) > 0:
+                                for item in tag_data:
+                                    # Check if item looks like image data
+                                    if isinstance(item, (bytes, MP4FreeForm)):
+                                        potential_data = None
+                                        if isinstance(item, bytes):
+                                            potential_data = item
+                                        elif isinstance(item, MP4FreeForm):
+                                            if hasattr(item, 'data'):
+                                                potential_data = item.data
+                                            elif hasattr(item, 'value'):
+                                                potential_data = item.value
+                                            else:
+                                                try:
+                                                    potential_data = bytes(item)
+                                                except:
+                                                    pass
+                                        
+                                        # Check if it looks like image data (starts with image magic bytes)
+                                        if potential_data and len(potential_data) > 100:  # Reasonable minimum size
+                                            # Check for common image file signatures
+                                            if (potential_data.startswith(b'\xff\xd8\xff') or  # JPEG
+                                                potential_data.startswith(b'\x89PNG') or  # PNG
+                                                potential_data.startswith(b'GIF') or  # GIF
+                                                potential_data.startswith(b'BM') or  # BMP
+                                                potential_data.startswith(b'RIFF') and b'WEBP' in potential_data[:20]):  # WEBP
+                                                print(f"  - SUCCESS: Found image data in tag '{tag}' ({len(potential_data)} bytes)")
+                                                return potential_data
+                        except Exception as e:
+                            pass  # Skip tags that can't be accessed
+                
+                except Exception as e:
+                    print(f"  - Error loading M4A file with MP4 class: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                # Method 2: Fallback to MutagenFile
+                print(f"  - Trying MutagenFile as fallback...")
+                try:
+                    if 'covr' in audio_file:
+                        covr = audio_file['covr']
+                        print(f"  - Found covr atom using MutagenFile")
+                        if isinstance(covr, list) and len(covr) > 0:
+                            for idx, covr_item in enumerate(covr):
+                                print(f"  - Processing covr item {idx + 1}/{len(covr)}, type: {type(covr_item)}")
+                                
+                                art_data = None
+                                
+                                # If it's bytes, use directly
+                                if isinstance(covr_item, bytes):
+                                    art_data = covr_item
+                                    if len(art_data) > 0:
+                                        print(f"  - SUCCESS: covr item is bytes ({len(art_data)} bytes)")
+                                        return art_data
+                                # If it's MP4Cover, extract data
+                                if isinstance(covr_item, MP4Cover):
+                                    # MP4Cover IS bytes - convert directly to bytes
+                                    try:
+                                        art_data = bytes(covr_item)
+                                        if art_data and len(art_data) > 0:
+                                            print(f"  - SUCCESS: Extracted album art from MP4Cover (MutagenFile) ({len(art_data)} bytes)")
+                                            return art_data
+                                    except Exception as e:
+                                        print(f"  - Error converting MP4Cover to bytes: {e}")
+                                
+                                # If it's MP4FreeForm, extract data
+                                elif isinstance(covr_item, MP4FreeForm):
+                                    if hasattr(covr_item, 'data'):
+                                        try:
+                                            art_data = covr_item.data
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from MP4FreeForm.data (MutagenFile) ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm.data: {e}")
+                                    
+                                    if not art_data and hasattr(covr_item, 'value'):
+                                        try:
+                                            art_data = covr_item.value
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from MP4FreeForm.value (MutagenFile) ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error accessing MP4FreeForm.value: {e}")
+                                    
+                                    if not art_data:
+                                        try:
+                                            art_data = bytes(covr_item)
+                                            if art_data and len(art_data) > 0:
+                                                print(f"  - SUCCESS: Got data from bytes() conversion (MutagenFile) ({len(art_data)} bytes)")
+                                                return art_data
+                                        except Exception as e:
+                                            print(f"  - Error converting to bytes: {e}")
+                                
+                                if not art_data or len(art_data) == 0:
+                                    print(f"  - FAILED: covr item {idx + 1} found but could not extract data (type: {type(covr_item)})")
+                    else:
+                        print(f"  - No covr atom found using MutagenFile")
+                except Exception as e:
+                    print(f"  - Error with MutagenFile fallback: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                print(f"  - FAILED: Could not extract album art from M4A file using any method")
+            except Exception as e:
+                print(f"  - Error extracting album art from M4A file: {e}")
+                import traceback
+                traceback.print_exc()
     except Exception:
         pass
     
@@ -455,6 +769,8 @@ def apply_album_art(output_path: Path, album_art: bytes) -> bool:
                 from mutagen.flac import FLAC, Picture
                 # Use FLAC class directly for better compatibility
                 flac_file = FLAC(str(output_path))
+                # Clear existing pictures to avoid duplicates
+                flac_file.clear_pictures()
                 picture = Picture()
                 picture.type = 3  # Cover (front)
                 picture.mime = 'image/jpeg'
@@ -1041,139 +1357,67 @@ def apply_denoising(
     prop_decrease: float = 0.5
 ) -> AudioSegment:
     """
-    Apply denoising to audio segment using noisereduce library.
+    Apply adaptive spectral denoising to audio segment using librosa.
+    Uses spectral gating with blending to preserve transients and air.
+    Maximum reduction is capped at 4dB.
     
     Args:
         audio_segment: AudioSegment to denoise
-        strength: Denoising strength - "light", "moderate", or "strong"
-        noise_sample: Optional noise sample array for profile-based denoising
-        sample_rate: Sample rate for processing
-        stationary: Whether to use stationary noise reduction
-        prop_decrease: Proportion of noise to reduce (0.0-1.0)
+        strength: Denoising strength - "light", "moderate", or "strong" (not used, kept for compatibility)
+        noise_sample: Optional noise sample array for noise profile (not used, kept for compatibility)
+        sample_rate: Sample rate for processing (not used, kept for compatibility)
+        stationary: Whether noise is stationary (not used, kept for compatibility)
+        prop_decrease: Proportion of noise to reduce (not used, kept for compatibility)
     
     Returns:
-        Denoised AudioSegment
+        Denoised AudioSegment with blended original to preserve transients
     """
     try:
-        import noisereduce as nr
+        import librosa
+        from scipy import signal
         
         # Convert to numpy array
         samples = np.array(audio_segment.get_array_of_samples())
         original_channels = audio_segment.channels
+        sr = audio_segment.frame_rate
+        
+        # Normalize samples to float32 [-1, 1]
+        max_amplitude = 2 ** (audio_segment.sample_width * 8 - 1)
+        if audio_segment.sample_width == 1:
+            samples_float = samples.astype(np.float32) / 128.0 - 1.0
+        elif audio_segment.sample_width == 2:
+            samples_float = samples.astype(np.float32) / 32768.0
+        elif audio_segment.sample_width == 4:
+            samples_float = samples.astype(np.float32) / 2147483648.0
+        else:
+            samples_float = samples.astype(np.float32) / max_amplitude
         
         if original_channels > 1:
             # Process each channel separately for stereo
-            channels = samples.reshape(-1, original_channels)
+            channels = samples_float.reshape(-1, original_channels)
             denoised_channels = []
             
             for ch in range(original_channels):
                 channel_samples = channels[:, ch]
-                
-                # Normalize to float32
-                if audio_segment.sample_width == 1:
-                    channel_samples = channel_samples.astype(np.float32) / 128.0 - 1.0
-                elif audio_segment.sample_width == 2:
-                    channel_samples = channel_samples.astype(np.float32) / 32768.0
-                elif audio_segment.sample_width == 4:
-                    channel_samples = channel_samples.astype(np.float32) / 2147483648.0
-                else:
-                    channel_samples = channel_samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
-                
-                # Use provided parameters (or map strength if using defaults)
-                if strength == "light" and prop_decrease == 0.5:
-                    actual_prop_decrease = 0.3
-                elif strength == "moderate" and prop_decrease == 0.5:
-                    actual_prop_decrease = 0.5
-                elif strength == "strong" and prop_decrease == 0.5:
-                    actual_prop_decrease = 0.7
-                else:
-                    actual_prop_decrease = prop_decrease
-                
-                actual_stationary = stationary
-                
-                # Apply denoising
-                if noise_sample is not None:
-                    # Use provided noise sample for profile-based denoising
-                    denoised = nr.reduce_noise(
-                        y=channel_samples,
-                        sr=audio_segment.frame_rate,
-                        y_noise=noise_sample,
-                        stationary=actual_stationary,
-                        prop_decrease=actual_prop_decrease
-                    )
-                else:
-                    # Automatic noise reduction
-                    denoised = nr.reduce_noise(
-                        y=channel_samples,
-                        sr=audio_segment.frame_rate,
-                        stationary=actual_stationary,
-                        prop_decrease=actual_prop_decrease
-                    )
-                
-                # Convert back to int16
-                denoised = np.clip(denoised, -1.0, 1.0)
-                if audio_segment.sample_width == 2:
-                    denoised = (denoised * 32768.0).astype(np.int16)
-                elif audio_segment.sample_width == 1:
-                    denoised = ((denoised + 1.0) * 128.0).astype(np.uint8)
-                elif audio_segment.sample_width == 4:
-                    denoised = (denoised * 2147483648.0).astype(np.int32)
-                
-                denoised_channels.append(denoised)
+                denoised_channel = _adaptive_spectral_denoise(channel_samples, sr)
+                denoised_channels.append(denoised_channel)
             
             # Recombine channels
-            denoised_samples = np.column_stack(denoised_channels).flatten()
+            denoised_samples_float = np.column_stack(denoised_channels).flatten()
         else:
             # Mono processing
-            # Normalize to float32
-            if audio_segment.sample_width == 1:
-                samples = samples.astype(np.float32) / 128.0 - 1.0
-            elif audio_segment.sample_width == 2:
-                samples = samples.astype(np.float32) / 32768.0
-            elif audio_segment.sample_width == 4:
-                samples = samples.astype(np.float32) / 2147483648.0
-            else:
-                samples = samples.astype(np.float32) / (2.0 ** (audio_segment.sample_width * 8 - 1))
-            
-            # Use provided parameters (or map strength if using defaults)
-            if strength == "light" and prop_decrease == 0.5:
-                actual_prop_decrease = 0.3
-            elif strength == "moderate" and prop_decrease == 0.5:
-                actual_prop_decrease = 0.5
-            elif strength == "strong" and prop_decrease == 0.5:
-                actual_prop_decrease = 0.7
-            else:
-                actual_prop_decrease = prop_decrease
-            
-            actual_stationary = stationary
-            
-            # Apply denoising
-            if noise_sample is not None:
-                denoised = nr.reduce_noise(
-                    y=samples,
-                    sr=audio_segment.frame_rate,
-                    y_noise=noise_sample,
-                    stationary=actual_stationary,
-                    prop_decrease=actual_prop_decrease
-                )
-            else:
-                denoised = nr.reduce_noise(
-                    y=samples,
-                    sr=audio_segment.frame_rate,
-                    stationary=actual_stationary,
-                    prop_decrease=actual_prop_decrease
-                )
-            
-            # Convert back to int
-            denoised = np.clip(denoised, -1.0, 1.0)
-            if audio_segment.sample_width == 2:
-                denoised_samples = (denoised * 32768.0).astype(np.int16)
-            elif audio_segment.sample_width == 1:
-                denoised_samples = ((denoised + 1.0) * 128.0).astype(np.uint8)
-            elif audio_segment.sample_width == 4:
-                denoised_samples = (denoised * 2147483648.0).astype(np.int32)
-            else:
-                denoised_samples = denoised
+            denoised_samples_float = _adaptive_spectral_denoise(samples_float, sr)
+        
+        # Convert back to original format
+        denoised_samples_float = np.clip(denoised_samples_float, -1.0, 1.0)
+        if audio_segment.sample_width == 2:
+            denoised_samples = (denoised_samples_float * 32768.0).astype(np.int16)
+        elif audio_segment.sample_width == 1:
+            denoised_samples = ((denoised_samples_float + 1.0) * 128.0).astype(np.uint8)
+        elif audio_segment.sample_width == 4:
+            denoised_samples = (denoised_samples_float * 2147483648.0).astype(np.int32)
+        else:
+            denoised_samples = (denoised_samples_float * max_amplitude).astype(samples.dtype)
         
         # Create new AudioSegment from denoised samples
         denoised_audio = AudioSegment(
@@ -1186,13 +1430,95 @@ def apply_denoising(
         return denoised_audio
         
     except ImportError:
-        print("  - Error: noisereduce library not installed. Install with: pip install noisereduce")
+        print("  - Error: librosa library not installed. Install with: pip install librosa")
         return audio_segment
     except Exception as e:
         print(f"  - Error applying denoising: {str(e)}")
         import traceback
         traceback.print_exc()
         return audio_segment
+
+
+def _adaptive_spectral_denoise(y: np.ndarray, sr: int, max_db_reduction: float = 4.0) -> np.ndarray:
+    """
+    Adaptive spectral denoising using librosa's spectral gating.
+    Blends cleaned and original audio to preserve transients and air.
+    
+    Args:
+        y: Audio signal as float32 array
+        sr: Sample rate
+        max_db_reduction: Maximum dB reduction (default 4.0)
+    
+    Returns:
+        Denoised audio signal with blending applied
+    """
+    import librosa
+    
+    # Compute STFT
+    stft = librosa.stft(y, n_fft=2048, hop_length=512, win_length=2048)
+    magnitude = np.abs(stft)
+    phase = np.angle(stft)
+    
+    # Estimate noise floor from quiet sections
+    # Use the median magnitude as noise floor estimate
+    noise_floor = np.median(magnitude, axis=1, keepdims=True)
+    
+    # Calculate signal-to-noise ratio in dB for each frequency bin
+    snr_db = 20 * np.log10((magnitude + 1e-10) / (noise_floor + 1e-10))
+    
+    # Adaptive threshold: more aggressive reduction for low SNR
+    # Threshold curve: -20dB to 0dB SNR maps to 0 to max_db_reduction
+    threshold_db = np.clip(-snr_db, 0, max_db_reduction)
+    
+    # Convert threshold to linear gain (0 to 1)
+    # For 4dB max reduction: 4dB = 10^(4/20) ≈ 1.585, so gain = 1/1.585 ≈ 0.631
+    # We want to reduce by threshold_db, so gain = 10^(-threshold_db/20)
+    gain_linear = np.power(10.0, -threshold_db / 20.0)
+    
+    # Apply spectral gating
+    cleaned_magnitude = magnitude * gain_linear
+    
+    # Adaptive blending: preserve more original in frequency bands with transients and air
+    # High frequencies (air) and strong transients should be preserved more
+    # Calculate frequency-dependent blend ratio
+    n_freq_bins = magnitude.shape[0]
+    freq_bins = np.arange(n_freq_bins)
+    
+    # Preserve more original in high frequencies (air) - blend ratio increases with frequency
+    # Preserve more original where signal is strong (transients)
+    # Blend ratio: 0.4 (40% original) to 0.7 (70% original)
+    base_blend = 0.4
+    freq_blend_factor = (freq_bins / n_freq_bins) * 0.3  # More preservation at high frequencies
+    signal_strength = magnitude / (np.max(magnitude, axis=0, keepdims=True) + 1e-10)
+    signal_blend_factor = signal_strength * 0.2  # More preservation where signal is strong
+    
+    # Frequency-dependent blend ratio per time frame
+    blend_ratio_per_bin = base_blend + freq_blend_factor[:, np.newaxis] + signal_blend_factor
+    blend_ratio_per_bin = np.clip(blend_ratio_per_bin, 0.3, 0.7)
+    
+    # Apply frequency-dependent blending in spectral domain
+    blended_magnitude = blend_ratio_per_bin * magnitude + (1.0 - blend_ratio_per_bin) * cleaned_magnitude
+    
+    # Reconstruct blended signal
+    blended_stft = blended_magnitude * np.exp(1j * phase)
+    y_blended = librosa.istft(blended_stft, hop_length=512, win_length=2048, length=len(y))
+    
+    # Ensure we don't exceed max reduction after blending
+    original_rms = np.sqrt(np.mean(y ** 2))
+    blended_rms = np.sqrt(np.mean(y_blended ** 2))
+    
+    if original_rms > 0:
+        final_reduction_db = 20 * np.log10(blended_rms / original_rms)
+        if final_reduction_db < -max_db_reduction:
+            # Scale to meet max reduction limit
+            target_rms = original_rms * np.power(10.0, -max_db_reduction / 20.0)
+            scale_factor = target_rms / blended_rms if blended_rms > 0 else 1.0
+            y_blended = y_blended * scale_factor
+            print(f"  - Denoising reduction: {20 * np.log10((original_rms * scale_factor) / original_rms):.2f}dB (capped at {max_db_reduction}dB)")
+        else:
+            print(f"  - Denoising reduction: {final_reduction_db:.2f}dB")
+    
+    return y_blended.astype(np.float32)
 
 
 def apply_vst3_plugins(
@@ -1397,9 +1723,15 @@ def process_audio_file(
         if metadata:
             print(f"  - Extracted metadata: {', '.join(metadata.keys())[:50]}...")
         if album_art:
-            print(f"  - Extracted album art ({len(album_art)} bytes)")
+            print(f"  - SUCCESS: Extracted album art from original file ({len(album_art)} bytes)")
         else:
-            print(f"  - No album art found in input file")
+            print(f"  - WARNING: No album art found in input file")
+            # For M4A files, provide more detailed debugging
+            if input_path.suffix.lower() in ['.m4a', '.mp4']:
+                print(f"  - Debug: Attempted to extract from M4A file: {input_path.name}")
+                print(f"  - Debug: File exists: {input_path.exists()}")
+                if input_path.exists():
+                    print(f"  - Debug: File size: {input_path.stat().st_size} bytes")
         
         # Handle lossless to FLAC conversion if requested (AFLAC, AIFF/AIF, and ALAC M4A)
         file_ext = input_path.suffix.lower()
@@ -1523,7 +1855,7 @@ def process_audio_file(
                     actual_stationary = False  # Strong mode uses non-stationary
                     actual_prop_decrease = 0.7 if prop_decrease == 0.5 else prop_decrease
                 
-                # Apply denoising with custom parameters
+                # Apply adaptive spectral denoising (parameters kept for compatibility but not used)
                 audio = apply_denoising(
                     audio, 
                     strength=denoise_strength, 
@@ -1531,7 +1863,7 @@ def process_audio_file(
                     stationary=actual_stationary,
                     prop_decrease=actual_prop_decrease
                 )
-                print(f"  - Applied denoising (strength: {denoise_strength}, reduction: {actual_prop_decrease:.1%}, stationary: {actual_stationary})")
+                print(f"  - Applied adaptive spectral denoising (max reduction: 4dB, blended to preserve transients)")
         
         # 4. Apply VST3 plugins (if requested) - after denoising, before normalization
         if vst3_plugins:
@@ -1723,7 +2055,24 @@ def process_audio_file(
             print(f"  - Note: FFmpeg not found in PATH, using pydub export (may not be exactly 24-bit)")
             audio.export(str(output_path), format=output_format)
         
-        # Apply metadata and album art to output file
+        # Wait a moment to ensure the output file is fully written and not locked
+        max_wait_time = 2.0  # Maximum time to wait in seconds
+        wait_interval = 0.1  # Check every 100ms
+        waited = 0.0
+        
+        while waited < max_wait_time:
+            try:
+                # Try to open the file in read mode to check if it's accessible
+                with open(output_path, 'rb'):
+                    break
+            except (IOError, OSError, PermissionError):
+                # File might still be locked, wait a bit and retry
+                time.sleep(wait_interval)
+                waited += wait_interval
+                if waited >= max_wait_time:
+                    print(f"  - Warning: Output file still locked after {max_wait_time}s, proceeding anyway")
+        
+        # Apply metadata first (before album art to ensure proper order)
         if metadata:
             if apply_metadata(output_path, input_path, metadata):
                 print(f"  - Metadata preserved")
@@ -1731,15 +2080,95 @@ def process_audio_file(
                 print(f"  - Warning: Could not preserve metadata")
         
         # Apply album art separately (FFmpeg might not preserve it properly)
-        if album_art:
+        # For ALL FLAC outputs (including converted from AIFF/AIF and ALAC M4A), use the pre-extracted album art
+        # This ensures we use the album art extracted at the beginning of processing
+        if output_path.suffix.lower() == '.flac':
+            print(f"  - FLAC output detected, applying album art from original file...")
+            # Use the album art we already extracted at the beginning, or extract fresh if needed
+            original_album_art = album_art if album_art else extract_album_art(input_path)
+            # Debug: Show what we're working with
+            if original_album_art:
+                print(f"  - Using {'pre-extracted' if album_art else 'freshly extracted'} album art ({len(original_album_art)} bytes)")
+            else:
+                print(f"  - Warning: No album art available for FLAC output")
+                print(f"  - Original file: {input_path.name} ({input_path.suffix.lower()})")
+            if original_album_art:
+                print(f"  - Album art ready ({len(original_album_art)} bytes), applying to FLAC file...")
+                # Retry mechanism for applying album art
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        if apply_album_art(output_path, original_album_art):
+                            print(f"  - SUCCESS: Album art successfully applied to FLAC file")
+                            break
+                        else:
+                            if attempt < max_retries - 1:
+                                print(f"  - Attempt {attempt + 1} failed, waiting and retrying...")
+                                time.sleep(0.2 * (attempt + 1))  # Increasing delay
+                            else:
+                                print(f"  - FAILED: Warning: Could not apply album art to FLAC file after {max_retries} attempts")
+                                print(f"  - Output file: {output_path}")
+                                print(f"  - Output exists: {output_path.exists()}")
+                                print(f"  - Output file size: {output_path.stat().st_size if output_path.exists() else 0} bytes")
+                                print(f"  - Album art size: {len(original_album_art)} bytes")
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            print(f"  - Attempt {attempt + 1} failed with error: {e}, retrying...")
+                            time.sleep(0.2 * (attempt + 1))
+                        else:
+                            print(f"  - FAILED: Error applying album art after {max_retries} attempts: {e}")
+                            import traceback
+                            traceback.print_exc()
+            else:
+                print(f"  - FAILED: No album art found in original file")
+                # Provide detailed debugging for AIFF and M4A files
+                file_ext = input_path.suffix.lower()
+                if file_ext in ['.aif', '.aiff', '.aifc', '.m4a', '.mp4']:
+                    print(f"  - Debug: Attempted to extract from {file_ext.upper()} file: {input_path.name}")
+                    print(f"  - Debug: File exists: {input_path.exists()}")
+                    if input_path.exists():
+                        print(f"  - Debug: File size: {input_path.stat().st_size:,} bytes")
+                        # Try extraction one more time with detailed output
+                        print(f"  - Debug: Attempting one more extraction with verbose output...")
+                        test_art = extract_album_art(input_path)
+                        if test_art:
+                            print(f"  - Debug: Second extraction attempt SUCCEEDED ({len(test_art):,} bytes)")
+                            print(f"  - Debug: This suggests the initial extraction failed but retry works")
+                        else:
+                            print(f"  - Debug: Second extraction attempt also FAILED")
+        elif album_art:
+            # For other output formats, use the previously extracted album art
             print(f"  - Attempting to apply album art to {output_path.name}...")
             if apply_album_art(output_path, album_art):
                 print(f"  - Album art preserved")
             else:
-                print(f"  - Warning: Could not preserve album art")
-                print(f"  - Output file: {output_path}")
-                print(f"  - Output exists: {output_path.exists()}")
-                print(f"  - Album art size: {len(album_art)} bytes")
+                print(f"  - Warning: Could not preserve album art, trying direct copy from original file...")
+                # Try extracting directly from original file and applying to output
+                original_album_art = extract_album_art(input_path)
+                if original_album_art:
+                    print(f"  - Re-extracted album art from original file ({len(original_album_art)} bytes)")
+                    if apply_album_art(output_path, original_album_art):
+                        print(f"  - Album art successfully copied from original file")
+                    else:
+                        print(f"  - Warning: Could not apply re-extracted album art")
+                        print(f"  - Output file: {output_path}")
+                        print(f"  - Output exists: {output_path.exists()}")
+                        print(f"  - Album art size: {len(original_album_art)} bytes")
+                else:
+                    print(f"  - Could not extract album art from original file")
+        else:
+            # If no album art was found initially, try extracting again from original file
+            # This handles cases where extraction might have failed the first time
+            print(f"  - No album art found initially, trying direct extraction from original file...")
+            original_album_art = extract_album_art(input_path)
+            if original_album_art:
+                print(f"  - Found album art in original file ({len(original_album_art)} bytes)")
+                if apply_album_art(output_path, original_album_art):
+                    print(f"  - Album art successfully copied from original file to output")
+                else:
+                    print(f"  - Warning: Could not apply album art to output file")
+            else:
+                print(f"  - No album art found in original file")
         
         # If we converted lossless to FLAC and the original file still exists, delete it
         # Only delete if processing in place (input and output are the same location)
@@ -1777,11 +2206,11 @@ def process_audio_file(
                         original_format = "lossless"
                     print(f"  - Original {original_format} file preserved (output in different folder)")
         
-        print(f"  ✓ Successfully processed: {output_path.name}\n")
+        print(f"  SUCCESS: Successfully processed: {output_path.name}\n")
         return True
         
     except Exception as e:
-        print(f"  ✗ Error processing {input_path.name}: {str(e)}\n")
+        print(f"  ERROR: Error processing {input_path.name}: {str(e)}\n")
         return False
 
 
@@ -1870,7 +2299,7 @@ def main():
             print("Aborted.")
             sys.exit(1)
     else:
-        print("✓ FFmpeg found")
+        print("SUCCESS: FFmpeg found")
     
     print("-" * 60)
     
