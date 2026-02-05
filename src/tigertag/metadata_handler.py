@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import sys
 import pandas as pd
 from helper_functions import strip_accents, parse_date
 
@@ -44,10 +45,10 @@ def write_parquet_files(input_csv_folder, output_folder):
             output_path = Path(output_folder, name + ".parquet")
             df.to_parquet(output_path)
             
-            print(f" ✓ Saved to {output_path.name}")
+            print(f" [OK] Saved to {output_path.name}")
             sys.stdout.flush()
         except Exception as e:
-            print(f" ✗ Error: {str(e)}")
+            print(f" [ERROR] {str(e)}")
             sys.stdout.flush()
             raise
 

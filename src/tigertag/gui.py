@@ -868,7 +868,7 @@ class ToolGUI:
         self.artist_format = tk.StringVar(value="leader - singer")  # Default format
         
         # Toggle options for processing steps
-        self.update_metadata = tk.BooleanVar(value=True)  # Default: enabled
+        self.update_metadata_enabled = tk.BooleanVar(value=True)  # Default: enabled
         self.update_filename = tk.BooleanVar(value=True)  # Default: enabled
         self.process_audio = tk.BooleanVar(value=True)  # Default: enabled
         
@@ -1185,7 +1185,7 @@ class ToolGUI:
         self.update_metadata_check = ttk.Checkbutton(
             run_button_frame, 
             text="Update Metadata", 
-            variable=self.update_metadata
+            variable=self.update_metadata_enabled
         )
         self.update_metadata_check.grid(row=0, column=0, padx=5)
         
@@ -2490,7 +2490,7 @@ class ToolGUI:
             
             # Check if we only need to process audio (skip matching if metadata and filename updates are disabled)
             only_process_audio = (self.process_audio.get() and 
-                                 not self.update_metadata.get() and 
+                                 not self.update_metadata_enabled.get() and 
                                  not self.update_filename.get())
             
             if only_process_audio:
@@ -2798,7 +2798,7 @@ class ToolGUI:
                     
                     # Copy original file to output folder (original file is never modified)
                     # Only copy if we need to do something (metadata update, audio processing, or filename update)
-                    should_copy = (self.update_metadata.get() or 
+                    should_copy = (self.update_metadata_enabled.get() or 
                                   self.process_audio.get() or 
                                   self.update_filename.get())
                     
@@ -2986,7 +2986,7 @@ class ToolGUI:
                             traceback.print_exc()
                     
                     # Write metadata if enabled
-                    if self.update_metadata.get():
+                    if self.update_metadata_enabled.get():
                         self.root.after(0, lambda: self.music_player.unload_file())
                         time.sleep(0.2)
                         
