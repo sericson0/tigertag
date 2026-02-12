@@ -240,7 +240,12 @@ def parse_date(date_str):
 
 
 def subset_entries(df: pd.DataFrame, start_year: int, end_year: int) -> pd.DataFrame:
-    return df[df["Year"].astype(int).between(start_year, end_year)].reset_index(drop=True)
+    """Filter dataframe to entries within the year range, handling None/NaN values."""
+    # Convert Year column to numeric, coercing errors to NaN
+    years = pd.to_numeric(df["Year"], errors='coerce')
+    # Filter rows where year is valid (not NaN) and within range
+    mask = years.notna() & years.between(start_year, end_year)
+    return df[mask].reset_index(drop=True)
 
 
 def parse_years_from_folder(folder_path):
